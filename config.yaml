@@ -69,6 +69,7 @@ greeting:
   chat_ids: [9045953592]           # 主动问候的 Telegram chat_id（可加多个）
 
 emotion:
+  enabled: false                   # 是否发送情感表情图（默认关闭）
   image_dir: "assets/emotions"     # 情感立绘图目录；目录内无对应图片则不发送
 
 search:

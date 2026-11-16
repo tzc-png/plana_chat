@@ -12,7 +12,7 @@
 - **主动问候**：早上 8 点、晚上 10 点主动发问候（文案不固定，并会带一句你之前未完成事项的关心）
 - **追问机制**：主回复后再补一句自然的追问，让对话更灵动（免打扰时关闭）
 - **三种模式**：`default`（默认，追问动态决策）/ `active`（总是追问）/ `quiet`（免打扰），聊天 `/quiet` `/active` `/default` 或 PC `plana quiet/active/default` 切换
-- **情感表情图**：按回复情感自动发对应立绘表情图（可自备图片）
+- **情感表情图**：按回复情感自动发对应立绘表情图（可自备图片，默认关闭）
 - **智能搜索**（可选）：问实时/事实性问题时联网搜索再回答
 - **引擎可切换与自动降级**：云端 DeepSeek（默认）或本地 Ollama；云端余额不足/失败时自动切本地，日志红色高亮提示
 - **命令行管理**：`plana on/off/system_on/...` 一条命令启停，可做成开机自启
@@ -192,7 +192,7 @@ plana help                 # 查看所有指令
 | `telegram` | `token_env` / `proxy` | token 的环境变量名 / 代理地址 |
 | `greeting` | `enabled` / `times` / `chat_ids` | 主动问候开关 / 时刻 / 目标用户 |
 | `behavior` | `mode` / `follow_up` / `follow_up_delay` | 运行模式（default/active/quiet）/ 追问开关 / 追问延迟（秒） |
-| `emotion` | `image_dir` | 表情图目录（见下） |
+| `emotion` | `enabled` / `image_dir` | 表情图开关（默认关）/ 表情图目录（见下） |
 | `search` | `enabled` | 智能搜索开关（默认关） |
 
 ## 功能详解
@@ -205,7 +205,7 @@ plana help                 # 查看所有指令
 
 ### 情感表情图
 
-机器人每次回复会带情感标签（如 `[emotion:sheepish]`），若 `assets/emotions/<情感名>/` 文件夹里有图片，就随机抽一张发给你；没有则不发。
+机器人每次回复会带情感标签（如 `[emotion:sheepish]`）。开启 `emotion.enabled: true` 后，若 `assets/emotions/<情感名>/` 文件夹里有图片，就随机抽一张发给你；没有则不发（**默认关闭**）。
 
 已预建好 11 个情绪文件夹：`neutral` `sheepish` `love` `sulky` `jealous` `expectant` `dumbfounded` `delighted` `cheerful` `puzzled` `like`。把图片（png/jpg/webp）直接丢进对应文件夹即可。
 

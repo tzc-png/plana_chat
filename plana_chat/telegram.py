@@ -99,6 +99,8 @@ class TelegramBot:
         return random.choice(imgs) if imgs else None
 
     async def _maybe_send_emotion(self, chat_id: int, emotion: str) -> None:
+        if not self.cfg.emotion.get("enabled", False):
+            return
         img = self._emotion_image(emotion)
         if img is None:
             return
