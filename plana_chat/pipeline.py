@@ -277,6 +277,27 @@ class PlanaPipeline:
             voice_wav = await self._voice(display_text)
         return ProcessResult(display_text=display_text, emotion=emotion, voice_wav=voice_wav)
 
+    async def follow_up(self, user_id: str, last_user: str, last_assistant: str) -> str | None:
+        """生成一句简短自然的追问，让对话继续。"""
+        prompt = (
+            "请再补一句简短、自然的追问或关心（一句话，尽量 15 字以内），"
+            "让对话继续。不要啰嗦、不要重复刚才的话、不要带情感标签。"
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt()},
+            {"role": "user", "content": last_user},
+            {"role": "assistant", "content": last_assistant},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        text = strip_emotion_tag(raw).strip()
+        return text or None
+
+    async def store_assistant(self, user_id: str, text: str, emotion: str | None = None) -> None:
+        """把追问等补充回复也存入记忆（带 embedding）。"""
+        emb = await self._embed(text)
+        self.memory.add(user_id, "assistant", text, emotion, embedding=emb)
+
     async def _voice(self, display_text: str) -> bytes | None:
         try:
             voice_text = clean_for_tts(display_text)

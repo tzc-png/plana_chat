@@ -10,6 +10,8 @@
 - **本地语音**：GPT-SoVITS 日语模型本地合成，Telegram 语音消息（OGG/Opus）
 - **长期记忆**：每个用户独立的 SQLite 记忆，含「滚动历史 + 总结压缩 + 事实抽取 + 语义检索」四层，能跨天记住你的喜好、未完成的事，并能按语义精准回忆过往对话细节
 - **主动问候**：早上 8 点、晚上 10 点主动发问候（文案不固定，并会带一句你之前未完成事项的关心）
+- **追问机制**：主回复后再补一句自然的追问，让对话更灵动（免打扰时关闭）
+- **免打扰开关**：`/quiet` `/active`（聊天）或 `plana quiet` `plana active`（PC）一键静默/恢复
 - **情感表情图**：按回复情感自动发对应立绘表情图（可自备图片）
 - **智能搜索**（可选）：问实时/事实性问题时联网搜索再回答
 - **引擎可切换**：云端 DeepSeek（默认）或本地 Ollama，云端失败自动降级
@@ -161,6 +163,8 @@ source ~/.bashrc           # 或重开终端
 plana on                   # 后台启动机器人
 plana status               # 查看运行状态
 plana off                  # 停止并释放语音引擎
+plana quiet                # 进入免打扰模式（关闭主动问候/追问）
+plana active               # 恢复活跃模式
 plana system_on            # 设为 systemd 服务（开机自启，需 sudo）
 plana system_off           # 取消开机自启（需 sudo）
 plana help                 # 查看所有指令
@@ -186,6 +190,7 @@ plana help                 # 查看所有指令
 | `reply` | `mode` | `text_voice`（文字+语音，默认）/ `voice` / `text` |
 | `telegram` | `token_env` / `proxy` | token 的环境变量名 / 代理地址 |
 | `greeting` | `enabled` / `times` / `chat_ids` | 主动问候开关 / 时刻 / 目标用户 |
+| `behavior` | `quiet` / `follow_up` / `follow_up_delay` | 免打扰默认值 / 追问开关 / 追问延迟（秒） |
 | `emotion` | `image_dir` | 表情图目录（见下） |
 | `search` | `enabled` | 智能搜索开关（默认关） |
 
@@ -202,6 +207,14 @@ plana help                 # 查看所有指令
 机器人每次回复会带情感标签（如 `[emotion:sheepish]`），若 `assets/emotions/<情感名>/` 文件夹里有图片，就随机抽一张发给你；没有则不发。
 
 已预建好 11 个情绪文件夹：`neutral` `sheepish` `love` `sulky` `jealous` `expectant` `dumbfounded` `delighted` `cheerful` `puzzled` `like`。把图片（png/jpg/webp）直接丢进对应文件夹即可。
+
+### 追问与免打扰
+
+- **追问**：`behavior.follow_up: true` 时，主回复后隔几秒再补一句自然的追问（纯文字），让对话更灵动
+- **免打扰**：开启后关闭主动问候和追问（仍正常回复你的消息）
+  - 聊天中：发 `/quiet` 静默、`/active` 恢复（这两条是控制指令，机器人不会回复）
+  - PC 端：`plana quiet` / `plana active`（约 30 秒内生效）
+  - 默认值：`config.yaml` 的 `behavior.quiet`
 
 ### 智能搜索
 

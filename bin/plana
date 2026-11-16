@@ -44,6 +44,8 @@ usage() {
     cat <<'EOF'
   on          后台启动机器人（非 systemd 模式，日志见 data/plana.log）
   off         停止机器人并释放语音引擎
+  quiet       进入免打扰模式（关闭主动问候/追问）
+  active      恢复活跃模式
   system_on   安装并启用 systemd 服务（开机自启，需 sudo）
   system_off  停止并禁用 systemd 服务（需 sudo）
   status      查看运行状态
@@ -79,6 +81,18 @@ case "${1:-}" in
   off)
     stop_bg
     echo "plana 已关闭（含语音引擎）"
+    ;;
+
+  quiet)
+    mkdir -p "$DATA_DIR"
+    echo '{"quiet": true}' > "$DATA_DIR/state.json"
+    echo "plana 已进入免打扰模式（主动问候/追问已关闭）"
+    ;;
+
+  active)
+    mkdir -p "$DATA_DIR"
+    echo '{"quiet": false}' > "$DATA_DIR/state.json"
+    echo "plana 已恢复活跃模式"
     ;;
 
   system_on)

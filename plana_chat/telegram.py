@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 from datetime import datetime
@@ -27,6 +28,8 @@ class TelegramBot:
         self.pipeline = build_pipeline(cfg)
         self.offset = 0
         self._greeted: dict[str, str] = {}  # {时间: 上次问候日期}，避免重复问候
+        self._state_file = Path(__file__).resolve().parent.parent / "data" / "state.json"
+        self.quiet = self._load_quiet()
 
     def _client(self) -> httpx.AsyncClient:
         kwargs: dict = {"timeout": 60}
@@ -104,6 +107,41 @@ class TelegramBot:
         except Exception:
             logger.exception("发送表情图失败 emotion=%s", emotion)
 
+    # ── 免打扰状态 ────────────────────────────────────────────────────────
+    def _load_quiet(self) -> bool:
+        try:
+            data = json.loads(self._state_file.read_text())
+            return bool(data.get("quiet"))
+        except Exception:
+            return bool(self.cfg.behavior.get("quiet", False))
+
+    def _set_quiet(self, val: bool) -> None:
+        self._state_file.parent.mkdir(parents=True, exist_ok=True)
+        self._state_file.write_text(json.dumps({"quiet": val}))
+        self.quiet = val
+
+    def _handle_command(self, chat_id: int, text: str) -> bool:
+        """处理控制指令；返回 True 表示已处理（不回复）。"""
+        t = text.strip().lower()
+        if t == "/quiet":
+            self._set_quiet(True)
+            logger.info("已开启免打扰（chat=%s）", chat_id)
+            return True
+        if t == "/active":
+            self._set_quiet(False)
+            logger.info("已关闭免打扰（chat=%s）", chat_id)
+            return True
+        return False
+
+    async def _state_watcher(self) -> None:
+        """每 30 秒刷新免打扰状态，让 plana quiet/active（CLI）也能即时生效。"""
+        while True:
+            await asyncio.sleep(30)
+            try:
+                self.quiet = self._load_quiet()
+            except Exception:
+                pass
+
     async def _send_greeting(self) -> None:
         for chat_id in self.cfg.greeting.chat_ids:
             try:
@@ -123,6 +161,9 @@ class TelegramBot:
         """每 30 秒检查一次是否到了问候时刻（目标时刻起 5 分钟窗口内，当天只发一次）。"""
         while True:
             try:
+                if self.quiet:
+                    await asyncio.sleep(60)
+                    continue
                 now = datetime.now()
                 today = now.strftime("%Y-%m-%d")
                 now_min = now.hour * 60 + now.minute
@@ -138,6 +179,9 @@ class TelegramBot:
             await asyncio.sleep(30)
 
     async def handle_text(self, chat_id: int, user_id: str, text: str) -> None:
+        if self._handle_command(chat_id, text):
+            return
+
         await self.send_chat_action(chat_id, "typing")
         result = await self.pipeline.process(user_id, text)
 
@@ -152,8 +196,20 @@ class TelegramBot:
                 logger.exception("发送语音失败")
         await self._maybe_send_emotion(chat_id, result.emotion)
 
+        # 追问：主回复后再补一句自然的追问（免打扰时关闭）
+        if self.cfg.behavior.get("follow_up", True) and not self.quiet:
+            try:
+                await asyncio.sleep(self.cfg.behavior.get("follow_up_delay", 4))
+                follow = await self.pipeline.follow_up(user_id, text, result.display_text)
+                if follow:
+                    await self.send_text(chat_id, follow)
+                    await self.pipeline.store_assistant(user_id, follow)
+            except Exception:
+                logger.exception("追问失败")
+
     async def run(self) -> None:
         logger.info("Telegram 机器人已启动（token 前缀 %s…）", self.token[:8])
+        asyncio.create_task(self._state_watcher())
         if self.cfg.greeting.enabled:
             asyncio.create_task(self._greet_loop())
             logger.info("主动问候已启用：%s", self.cfg.greeting.times)
