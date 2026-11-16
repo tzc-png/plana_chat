@@ -28,7 +28,7 @@ class OllamaLLM(ChatLLM):
             "stream": False,
             "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
         }
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
             resp = await client.post(f"{self.host}/api/chat", json=body)
             resp.raise_for_status()
             data = resp.json()

@@ -11,7 +11,7 @@ async def embed_text(
     timeout: float = 60,
 ) -> list[float]:
     """调用 Ollama /api/embed，返回文本的向量（bge-m3，中文/多语种友好）。"""
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
         resp = await client.post(
             f"{host}/api/embed",
             json={"model": model, "input": text},

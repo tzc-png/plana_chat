@@ -32,7 +32,7 @@ class OpenAICompatLLM(ChatLLM):
         }
         body.update(self.extra_body)
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, trust_env=False) as client:
             resp = await client.post(
                 f"{self.base_url}/chat/completions",
                 headers={

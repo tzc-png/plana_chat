@@ -18,7 +18,7 @@ _UA = (
 
 async def duckduckgo_search(query: str, proxy: str = "", max_results: int = 5) -> str:
     """DuckDuckGo HTML 搜索，返回拼接的摘要文本（每行一条）。"""
-    kwargs: dict = {"timeout": 20, "headers": {"User-Agent": _UA}}
+    kwargs: dict = {"timeout": 20, "headers": {"User-Agent": _UA}, "trust_env": False}
     if proxy:
         kwargs["proxy"] = proxy
 

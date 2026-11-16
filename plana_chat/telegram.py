@@ -32,7 +32,7 @@ class TelegramBot:
         self.mode = self._load_mode()
 
     def _client(self) -> httpx.AsyncClient:
-        kwargs: dict = {"timeout": 60}
+        kwargs: dict = {"timeout": 60, "trust_env": False}
         if self.proxy:
             kwargs["proxy"] = self.proxy
         return httpx.AsyncClient(**kwargs)
