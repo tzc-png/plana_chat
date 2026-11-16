@@ -305,6 +305,10 @@ class PlanaPipeline:
 
         emotion = extract_emotion(raw)
         display_text = strip_emotion_tag(raw)
+
+        # 主动问候也存入记忆（作为 assistant 消息，带 embedding）
+        await self.store_assistant(user_id, display_text, emotion)
+
         voice_wav = None
         if self.cfg.reply.mode in ("text_voice", "voice"):
             voice_wav = await self._voice(display_text)
