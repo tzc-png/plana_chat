@@ -139,11 +139,11 @@ EOF
 
   status)
     if systemd_active; then
-      echo "plana：运行中（systemd 服务 $SERVICE）"
+      echo "运行方式：systemd 服务（$SERVICE）"
     elif is_running; then
-      echo "plana：运行中（后台进程，PID $(cat "$PID_FILE")）"
+      echo "运行方式：后台进程（PID $(cat "$PID_FILE")）"
     else
-      echo "plana：未运行"
+      echo "运行方式：未运行"
     fi
     if pgrep -f "plana_tts_server.py" > /dev/null 2>&1; then
       echo "语音引擎：运行中"

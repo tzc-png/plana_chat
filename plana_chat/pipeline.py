@@ -165,10 +165,26 @@ class PlanaPipeline:
     async def _chat_with_fallback(self, messages: list[dict]) -> str:
         try:
             return await self.llm.chat(messages)
-        except Exception:
+        except Exception as e:
             if self.local_llm is not None and self.local_llm is not self.llm:
+                reason = self._degrade_reason(str(e))
+                if reason:
+                    logger.warning(
+                        "\033[31m[降级] 云端不可用（%s），已自动切换到本地 Ollama\033[0m", reason
+                    )
+                else:
+                    logger.warning("[降级] 云端调用失败，已切换到本地 Ollama：%s", e)
                 return await self.local_llm.chat(messages)
             raise
+
+    @staticmethod
+    def _degrade_reason(err: str) -> str | None:
+        """判断云端失败是否属于余额/额度类（用于红色高亮提示）。"""
+        low = err.lower()
+        for kw in ("insufficient", "balance", "余额", "402", "quota", "exceeded", "rate limit"):
+            if kw in low:
+                return err
+        return None
 
     # ── 记忆整理（总结压缩 + 事实抽取）──────────────────────────────────────
     @staticmethod

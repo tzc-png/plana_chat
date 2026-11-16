@@ -41,7 +41,12 @@ class OpenAICompatLLM(ChatLLM):
                 },
                 json=body,
             )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                try:
+                    err = resp.json().get("error", {}).get("message", resp.text)
+                except Exception:
+                    err = resp.text
+                raise RuntimeError(f"{resp.status_code}: {err}")
             data = resp.json()
 
         return data["choices"][0]["message"]["content"]
