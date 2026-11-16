@@ -40,7 +40,7 @@ tts:
   log_path: "data/tts.log"
 
 character:
-  persona_file: "plana_chat/character/plana.txt"
+  persona_file: "plana_chat/character/plana_compromise.txt"   # 折中版人格；可换回 plana.txt
 
 memory:
   rounds: 8                    # 每用户保留最近 N 轮
