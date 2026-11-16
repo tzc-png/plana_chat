@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# plana — 普拉娜 Telegram 机器人服务管理 CLI
+#
+# 用法：plana {on|off|system_on|system_off|status|help}
+# 本脚本位于 <项目根>/bin/ 下，会自动定位项目根目录。
+
+set -u
+
+PLANA_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VENV_PY="$PLANA_ROOT/.venv/bin/python"
+RUNNER="$PLANA_ROOT/run_telegram.py"
+DATA_DIR="$PLANA_ROOT/data"
+PID_FILE="$DATA_DIR/plana.pid"
+LOG_FILE="$DATA_DIR/plana.log"
+SERVICE="plana-chat"
+TTS_SOCK="/tmp/plana_tts.sock"
+
+# ── 状态判断 ──────────────────────────────────────────────────────────────────
+is_running() {
+    [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+systemd_active() {
+    systemctl is-active --quiet "$SERVICE" 2>/dev/null
+}
+
+# ── 停止非 systemd 的后台实例（含语音引擎）──────────────────────────────────
+stop_bg() {
+    if is_running; then
+        kill "$(cat "$PID_FILE")" 2>/dev/null
+        for _ in $(seq 1 10); do
+            is_running || break
+            sleep 0.5
+        done
+    fi
+    # 兜底：按进程名清理（不会匹配到本脚本，因脚本命令行不含这些字符串）
+    pkill -f "run_telegram.py" 2>/dev/null || true
+    pkill -f "plana_tts_server.py" 2>/dev/null || true
+    rm -f "$PID_FILE" "$TTS_SOCK"
+}
+
+# ── 帮助 ──────────────────────────────────────────────────────────────────────
+usage() {
+    cat <<'EOF'
+  on          后台启动机器人（非 systemd 模式，日志见 data/plana.log）
+  off         停止机器人并释放语音引擎
+  system_on   安装并启用 systemd 服务（开机自启，需 sudo）
+  system_off  停止并禁用 systemd 服务（需 sudo）
+  status      查看运行状态
+  help        显示本帮助
+EOF
+}
+
+case "${1:-}" in
+  on)
+    if systemd_active; then
+      echo "错误：systemd 服务已在运行，请先执行 plana system_off 再 plana on" >&2
+      exit 1
+    fi
+    if is_running; then
+      echo "plana 已在运行（PID $(cat "$PID_FILE")）"
+      exit 0
+    fi
+    mkdir -p "$DATA_DIR"
+    # setsid 彻底脱离终端，关终端/重启不依赖当前 shell
+    setsid "$VENV_PY" "$RUNNER" >> "$LOG_FILE" 2>&1 < /dev/null &
+    echo $! > "$PID_FILE"
+    sleep 1
+    if is_running; then
+      echo "plana 已启动（PID $(cat "$PID_FILE")）"
+      echo "日志：$LOG_FILE"
+    else
+      echo "启动失败，请查看日志：$LOG_FILE" >&2
+      rm -f "$PID_FILE"
+      exit 1
+    fi
+    ;;
+
+  off)
+    stop_bg
+    echo "plana 已关闭（含语音引擎）"
+    ;;
+
+  system_on)
+    stop_bg  # 先停掉后台实例，避免与 systemd 双开
+    UNIT="/etc/systemd/system/$SERVICE.service"
+    sudo tee "$UNIT" > /dev/null <<EOF
+[Unit]
+Description=Plana Telegram Chat Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$(whoami)
+WorkingDirectory=$PLANA_ROOT
+ExecStart=$VENV_PY $RUNNER
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now "$SERVICE"
+    echo "systemd 服务已安装并启动：$SERVICE"
+    systemctl --no-pager -l status "$SERVICE" | head -n 12
+    ;;
+
+  system_off)
+    sudo systemctl disable --now "$SERVICE" 2>/dev/null || true
+    sudo rm -f "/etc/systemd/system/$SERVICE.service"
+    sudo systemctl daemon-reload
+    pkill -f "plana_tts_server.py" 2>/dev/null || true
+    rm -f "$TTS_SOCK"
+    echo "systemd 服务已停止并移除"
+    ;;
+
+  status)
+    if systemd_active; then
+      echo "plana：运行中（systemd 服务 $SERVICE）"
+    elif is_running; then
+      echo "plana：运行中（后台进程，PID $(cat "$PID_FILE")）"
+    else
+      echo "plana：未运行"
+    fi
+    if pgrep -f "plana_tts_server.py" > /dev/null 2>&1; then
+      echo "语音引擎：运行中"
+    else
+      echo "语音引擎：未运行"
+    fi
+    ;;
+
+  help|--help|-h|"")
+    usage
+    ;;
+
+  *)
+    echo "未知指令：${1:-}" >&2
+    usage
+    exit 1
+    ;;
+esac

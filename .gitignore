@@ -1,0 +1,30 @@
+# 环境
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# 敏感配置
+.env
+
+# 运行时数据
+data/
+*.db
+*.silk
+*.pcm
+*.wav
+*.log
+
+# 本地语音模型（大文件，不进 git）
+voice/models/
+voice/plana_engine/pretrained_models/
+
+# Claude Code 内部状态
+.claude/
+
+# 用户上传文件（非项目源码）
+user_files/
+
+# 其他工具
+.pytest_cache/
+nb-cli.*

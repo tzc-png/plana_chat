@@ -1,0 +1,70 @@
+# plana_chat 主配置
+
+llm:
+  provider: deepseek            # deepseek | ollama
+  fallback_to_local: true       # 云端失败时降级到本地 ollama
+  base_url: "https://api.deepseek.com"
+  model: "deepseek-v4-flash"    # 若报模型名错误可改为 deepseek-chat
+  api_key_env: "DEEPSEEK_API_KEY"
+  temperature: 0.85
+  timeout: 120
+  # DeepSeek 关闭思考模式，让角色回复更自然
+  extra_body:
+    thinking: { type: disabled }
+
+ollama:
+  host: "http://127.0.0.1:11434"
+  model: "qwen2.5:14b"
+  temperature: 0.85
+  num_ctx: 4096
+  timeout: 300
+
+translator:
+  provider: deepseek            # deepseek | ollama
+  model: "deepseek-v4-flash"
+  prompt: "请把下面中文翻译成纯日语，只输出结果："
+  temperature: 0.3
+  ollama_model: "translategemma:4b"
+
+tts:
+  # 本地 GPT-SoVITS（已自包含，不依赖 shittim）
+  python: "/home/tzc/miniconda3/envs/plana/bin/python"
+  server_script: "/home/tzc/developer/plana_chat/voice/plana_tts_server.py"
+  engine_dir: "/home/tzc/developer/plana_chat/voice/plana_engine"
+  gpt_path: "/home/tzc/developer/plana_chat/voice/models/Plana-e15.ckpt"
+  vits_path: "/home/tzc/developer/plana_chat/voice/models/Plana_e16_s208.pth"
+  ref_wav: "/home/tzc/developer/plana_chat/voice/models/ref.wav"
+  ref_txt: "理解しました，先生は今，特にやるべきことはないですね，暇なんですね。"
+  socket: "/tmp/plana_tts.sock"
+  lang: "ja"
+  log_path: "data/tts.log"
+
+character:
+  persona_file: "plana_chat/character/plana.txt"
+
+memory:
+  rounds: 8                    # 每用户保留最近 N 轮
+  reset_hours: 2               # 超过 N 小时重置场景
+  db_path: "data/history.db"
+  compact_threshold: 20        # 消息数超过该值触发总结压缩 + 事实抽取
+
+reply:
+  mode: text_voice             # text_voice | voice | text
+  max_voice_chars: 300         # 语音文本超过该长度则截断
+
+telegram:
+  token_env: "TELEGRAM_BOT_TOKEN"
+  proxy: "http://127.0.0.1:7897"   # 本机 Clash Verge 代理；直连可留空
+
+greeting:
+  enabled: true
+  times: ["08:00", "22:00"]        # 北京时间，主动问候时刻
+  chat_ids: [9045953592]           # 主动问候的 Telegram chat_id（可加多个）
+
+emotion:
+  image_dir: "assets/emotions"     # 情感立绘图目录；目录内无对应图片则不发送
+
+search:
+  enabled: false                   # 智能搜索（可选增强，默认关闭）
+  provider: "duckduckgo"           # duckduckgo（可换搜索 API）
+  max_results: 5
