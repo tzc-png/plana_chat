@@ -46,7 +46,9 @@ memory:
   rounds: 8                    # 每用户保留最近 N 轮
   reset_hours: 2               # 超过 N 小时重置场景
   db_path: "data/history.db"
-  compact_threshold: 20        # 消息数超过该值触发总结压缩 + 事实抽取
+  compact_threshold: 20        # 未整理消息数超过该值触发总结压缩 + 事实抽取
+  embedding_model: "bge-m3"          # Ollama 本地 embedding 模型（中文语义检索，多语种）
+  retrieve_top_k: 5            # 语义检索注入的历史条数
 
 reply:
   mode: text_voice             # text_voice | voice | text

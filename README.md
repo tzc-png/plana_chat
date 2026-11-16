@@ -8,7 +8,7 @@
 
 - **角色扮演**：普拉娜人格（系统 prompt 可换），回复带情感标签
 - **本地语音**：GPT-SoVITS 日语模型本地合成，Telegram 语音消息（OGG/Opus）
-- **长期记忆**：每个用户独立的 SQLite 记忆，含「滚动历史 + 总结压缩 + 事实抽取」三层，能跨天记住你的喜好和未完成的事
+- **长期记忆**：每个用户独立的 SQLite 记忆，含「滚动历史 + 总结压缩 + 事实抽取 + 语义检索」四层，能跨天记住你的喜好、未完成的事，并能按语义精准回忆过往对话细节
 - **主动问候**：早上 8 点、晚上 10 点主动发问候（文案不固定，并会带一句你之前未完成事项的关心）
 - **情感表情图**：按回复情感自动发对应立绘表情图（可自备图片）
 - **智能搜索**（可选）：问实时/事实性问题时联网搜索再回答
@@ -32,7 +32,7 @@ Telegram 消息 → 角色对话(LLM) → 情感标签解析/文本清洗 → �
 | 操作系统 | Linux（作者在 Ubuntu 24.04 验证） |
 | GPU | NVIDIA 显卡（语音引擎用 CUDA 版 torch，约 1GB 显存；本地 LLM 需更多） |
 | Python | 两个独立环境：语音引擎用 **3.10**（conda），机器人用 **3.12**（venv） |
-| 软件 | [miniconda](https://docs.conda.io/en/latest/miniconda.html)、`ffmpeg`（带 libopus）、`git` |
+| 软件 | [miniconda](https://docs.conda.io/en/latest/miniconda.html)、`ffmpeg`（带 libopus）、`git`、[Ollama](https://ollama.com)（用于本地 embedding 语义记忆） |
 | 账号 | Telegram 账号；[DeepSeek](https://platform.deepseek.com) API key（可选，可改用本地 Ollama） |
 | 网络 | 代理（Telegram 国内需代理；机器人服务器端也要能连上 Telegram） |
 
@@ -109,6 +109,12 @@ pip install -e .
 
 系统还需 `ffmpeg`（含 libopus 编码器）：`sudo apt install ffmpeg`（或确认 `ffmpeg -encoders | grep libopus` 有输出）。
 
+还需本地 embedding 模型（用于「语义记忆」，让机器人能按语义回忆过往对话细节）：
+
+```bash
+ollama pull bge-m3    # 中文/多语种语义检索模型，约 1.2GB
+```
+
 ### 4. 配置 `.env`
 
 ```bash
@@ -175,7 +181,8 @@ plana help                 # 查看所有指令
 | | `gpt_path` / `vits_path` / `ref_wav` / `ref_txt` | 语音模型与参考音频 |
 | `character` | `persona_file` | 人格 prompt 文件（可换成 `plana_compromise.txt`） |
 | `memory` | `rounds` | 每用户保留最近 N 轮 |
-| | `compact_threshold` | 消息数超该值触发「总结压缩 + 事实抽取」 |
+| | `compact_threshold` | 未整理消息数超该值触发「总结压缩 + 事实抽取」 |
+| | `embedding_model` / `retrieve_top_k` | 语义检索用的 embedding 模型 / 注入的历史条数 |
 | `reply` | `mode` | `text_voice`（文字+语音，默认）/ `voice` / `text` |
 | `telegram` | `token_env` / `proxy` | token 的环境变量名 / 代理地址 |
 | `greeting` | `enabled` / `times` / `chat_ids` | 主动问候开关 / 时刻 / 目标用户 |
@@ -202,11 +209,12 @@ plana help                 # 查看所有指令
 
 ### 长期记忆
 
-三层记忆（都在 `data/history.db`）：
+四层记忆（都在 `data/history.db`），解决「跨天记住你」+「精准回忆细节」：
 
-1. **滚动历史**：最近 N 轮原始对话
-2. **总结压缩**：历史超阈值后，把最旧消息压成「长期记忆摘要」常驻上下文
-3. **事实抽取**：从中抽出「关于你的事实」和「未完成事项」，每次对话和主动问候时注入
+1. **滚动历史**：最近 N 轮原始对话（当前上下文）
+2. **总结压缩**：历史超阈值后，把旧消息压成「长期记忆摘要」常驻上下文
+3. **事实抽取**：抽出「关于你的事实」和「未完成事项」，每次对话和主动问候时注入
+4. **语义检索**：所有原文**永久保留**并用本地 embedding（`bge-m3`）向量化；你问起过去某件事时，按语义检索出最相关的历史原文注入上下文，细节不失真
 
 ## 注意事项
 

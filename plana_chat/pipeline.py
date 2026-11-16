@@ -10,7 +10,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+
 from .config import Config
+from .embedding import embed_text
 from .llm import build_llm, build_local_llm
 from .llm.base import ChatLLM
 from .memory import MemoryStore
@@ -90,6 +93,7 @@ class PlanaPipeline:
     async def process(self, user_id: str, user_text: str) -> ProcessResult:
         await self._maybe_consolidate(user_id)
         history = self.memory.recent(user_id, self.cfg.memory.rounds)
+        user_emb = await self._embed(user_text)
 
         # 可选：联网搜索增强
         user_content = user_text
@@ -124,6 +128,18 @@ class PlanaPipeline:
                  + "\n".join(f"- {o}" for o in open_items)}
             )
 
+        # 注入语义检索到的历史细节
+        if user_emb is not None:
+            retrieved = self._retrieve(user_id, user_emb)
+            if retrieved:
+                lines = "\n".join(
+                    ("老师：" if r["role"] == "user" else "普拉娜：") + r["content"]
+                    for r in retrieved
+                )
+                messages.append(
+                    {"role": "system", "content": "【与当前话题相关的历史对话（可参考回忆细节）】\n" + lines}
+                )
+
         messages.extend(history)
         hint = self._hint(user_id, history)
         if hint:
@@ -135,8 +151,10 @@ class PlanaPipeline:
         emotion = extract_emotion(raw)
         display_text = strip_emotion_tag(raw)
 
-        self.memory.add(user_id, "user", user_text)
-        self.memory.add(user_id, "assistant", display_text, emotion)
+        # 存储（带 embedding，原文永久保留）
+        self.memory.add(user_id, "user", user_text, embedding=user_emb)
+        assistant_emb = await self._embed(display_text)
+        self.memory.add(user_id, "assistant", display_text, emotion, embedding=assistant_emb)
 
         voice_wav = None
         mode = self.cfg.reply.mode
@@ -192,27 +210,44 @@ class PlanaPipeline:
         return data.get("facts", []), data.get("open_items", [])
 
     async def _maybe_consolidate(self, user_id: str) -> None:
-        """历史消息超阈值时：总结压缩 + 事实抽取，再删除最旧的消息。"""
+        """历史消息超阈值时：总结压缩 + 事实抽取（原文保留，不删除）。"""
         threshold = self.cfg.memory.get("compact_threshold", 20)
-        keep = self.cfg.memory.rounds * 2
-        count = self.memory.count(user_id)
-        n_old = count - keep
-        if count <= threshold or n_old <= 0:
+        upto = self.memory.consolidated_upto(user_id)
+        batch = self.memory.unconsolidated(user_id, upto, limit=200)
+        if len(batch) < threshold:
             return
-        old_msgs = self.memory.oldest(user_id, n_old)
         try:
-            new_summary = await self._summarize(old_msgs, self.memory.get_summary(user_id))
+            new_summary = await self._summarize(batch, self.memory.get_summary(user_id))
             self.memory.update_summary(user_id, new_summary)
-            facts, open_items = await self._extract_facts(old_msgs)
+            facts, open_items = await self._extract_facts(batch)
             self.memory.add_facts(user_id, facts, "fact")
             self.memory.add_facts(user_id, open_items, "open_item")
-            self.memory.delete_oldest(user_id, n_old)
+            self.memory.update_consolidated_upto(user_id, batch[-1]["id"])
             logger.info(
-                "记忆整理完成 user=%s（压缩 %d 条，事实 %d、未完成项 %d）",
-                user_id, n_old, len(facts), len(open_items),
+                "记忆整理完成 user=%s（处理 %d 条，事实 %d、未完成项 %d）",
+                user_id, len(batch), len(facts), len(open_items),
             )
         except Exception:
             logger.warning("记忆整理失败 user=%s", user_id, exc_info=True)
+
+    async def _embed(self, text: str) -> bytes | None:
+        """本地 embedding，返回 float32 字节；失败返回 None。"""
+        try:
+            emb = await embed_text(
+                text,
+                host=self.cfg.ollama.host,
+                model=self.cfg.memory.get("embedding_model", "bge-m3"),
+            )
+            return np.asarray(emb, dtype=np.float32).tobytes()
+        except Exception:
+            logger.warning("embedding 失败", exc_info=True)
+            return None
+
+    def _retrieve(self, user_id: str, user_emb: bytes) -> list[dict]:
+        """语义检索与当前话题最相关的历史消息。"""
+        top_k = self.cfg.memory.get("retrieve_top_k", 5)
+        exclude = self.cfg.memory.rounds * 2
+        return self.memory.search_similar(user_id, user_emb, limit=top_k, exclude_recent=exclude)
 
     async def greet(self, user_id: str) -> ProcessResult:
         """生成一条主动问候（早/晚，文案由 LLM 即时生成、不固定）。"""
