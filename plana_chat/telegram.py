@@ -54,6 +54,7 @@ class TelegramBot:
             )
 
     async def send_text(self, chat_id: int, text: str) -> None:
+        logger.info("[普拉娜] chat=%s: %s", chat_id, text)
         async with self._client() as client:
             resp = await client.post(
                 f"{self.api}/sendMessage",
@@ -62,6 +63,7 @@ class TelegramBot:
             resp.raise_for_status()
 
     async def send_voice(self, chat_id: int, ogg: bytes) -> None:
+        logger.info("[普拉娜] chat=%s: [语音]（%d 字节）", chat_id, len(ogg))
         async with self._client() as client:
             resp = await client.post(
                 f"{self.api}/sendVoice",
@@ -72,6 +74,7 @@ class TelegramBot:
 
     async def send_photo(self, chat_id: int, photo_path) -> None:
         path = Path(photo_path)
+        logger.info("[普拉娜] chat=%s: [表情图] %s", chat_id, path.name)
         mime = {
             ".png": "image/png",
             ".jpg": "image/jpeg",
@@ -240,7 +243,7 @@ class TelegramBot:
                             "\033[31m[拦截] 非白名单用户访问已忽略（user=%s）\033[0m", user_id
                         )
                         continue
-                    logger.info("[tg] chat=%s: %s", chat_id, text)
+                    logger.info("[老师] chat=%s: %s", chat_id, text)
                     try:
                         await self.handle_text(chat_id, user_id, text)
                     except Exception:
