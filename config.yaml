@@ -59,8 +59,8 @@ telegram:
   proxy: "http://127.0.0.1:7897"   # 本机 Clash Verge 代理；直连可留空
 
 behavior:
-  quiet: false                     # 免打扰：关闭主动问候与追问（也可用 /quiet /active 或 plana quiet/active）
-  follow_up: true                  # 追问：主回复后再补一句自然的追问
+  mode: default                    # default | active | quiet（默认 default）
+  follow_up: true                  # 追问总开关
   follow_up_delay: 4               # 追问延迟（秒）
 
 greeting:

@@ -44,8 +44,9 @@ usage() {
     cat <<'EOF'
   on          后台启动机器人（非 systemd 模式，日志见 data/plana.log）
   off         停止机器人并释放语音引擎
-  quiet       进入免打扰模式（关闭主动问候/追问）
-  active      恢复活跃模式
+  quiet       切换为 quiet 模式（免打扰，关闭主动问候/追问）
+  active      切换为 active 模式（总是追问）
+  default     切换为 default 模式（追问动态决策，默认）
   system_on   安装并启用 systemd 服务（开机自启，需 sudo）
   system_off  停止并禁用 systemd 服务（需 sudo）
   status      查看运行状态
@@ -85,14 +86,20 @@ case "${1:-}" in
 
   quiet)
     mkdir -p "$DATA_DIR"
-    echo '{"quiet": true}' > "$DATA_DIR/state.json"
-    echo "plana 已进入免打扰模式（主动问候/追问已关闭）"
+    echo '{"mode": "quiet"}' > "$DATA_DIR/state.json"
+    echo "plana 已切换为 quiet 模式（关闭主动问候/追问）"
     ;;
 
   active)
     mkdir -p "$DATA_DIR"
-    echo '{"quiet": false}' > "$DATA_DIR/state.json"
-    echo "plana 已恢复活跃模式"
+    echo '{"mode": "active"}' > "$DATA_DIR/state.json"
+    echo "plana 已切换为 active 模式（总是追问）"
+    ;;
+
+  default)
+    mkdir -p "$DATA_DIR"
+    echo '{"mode": "default"}' > "$DATA_DIR/state.json"
+    echo "plana 已切换为 default 模式（追问动态决策）"
     ;;
 
   system_on)
@@ -143,6 +150,27 @@ EOF
     else
       echo "语音引擎：未运行"
     fi
+    "$VENV_PY" - "$PLANA_ROOT" "$DATA_DIR" <<'PYEOF'
+import json, re, sys
+from pathlib import Path
+root = Path(sys.argv[1]); data_dir = Path(sys.argv[2])
+cfg = (root / "config.yaml").read_text(encoding="utf-8")
+m = re.search(r'\nmode:\s*(\w+)', cfg)
+default_mode = m.group(1) if m else "default"
+mode = default_mode
+sf = data_dir / "state.json"
+if sf.exists():
+    try:
+        mode = json.loads(sf.read_text()).get("mode", default_mode)
+    except Exception:
+        pass
+desc = {"default": "动态追问", "active": "总是追问", "quiet": "免打扰"}.get(mode, "?")
+m2 = re.search(r'persona_file:\s*"([^"]+)"', cfg)
+persona = m2.group(1) if m2 else "?"
+label = "折中版" if "compromise" in persona else "原版"
+print(f"模式：{mode}（{desc}）")
+print(f"人格：{label}（{persona}）")
+PYEOF
     ;;
 
   help|--help|-h|"")

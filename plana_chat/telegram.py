@@ -29,7 +29,7 @@ class TelegramBot:
         self.offset = 0
         self._greeted: dict[str, str] = {}  # {时间: 上次问候日期}，避免重复问候
         self._state_file = Path(__file__).resolve().parent.parent / "data" / "state.json"
-        self.quiet = self._load_quiet()
+        self.mode = self._load_mode()
 
     def _client(self) -> httpx.AsyncClient:
         kwargs: dict = {"timeout": 60}
@@ -107,38 +107,34 @@ class TelegramBot:
         except Exception:
             logger.exception("发送表情图失败 emotion=%s", emotion)
 
-    # ── 免打扰状态 ────────────────────────────────────────────────────────
-    def _load_quiet(self) -> bool:
+    # ── 模式状态（quiet / active / default）──────────────────────────────
+    def _load_mode(self) -> str:
         try:
             data = json.loads(self._state_file.read_text())
-            return bool(data.get("quiet"))
+            return data.get("mode", "default")
         except Exception:
-            return bool(self.cfg.behavior.get("quiet", False))
+            return self.cfg.behavior.get("mode", "default")
 
-    def _set_quiet(self, val: bool) -> None:
+    def _set_mode(self, val: str) -> None:
         self._state_file.parent.mkdir(parents=True, exist_ok=True)
-        self._state_file.write_text(json.dumps({"quiet": val}))
-        self.quiet = val
+        self._state_file.write_text(json.dumps({"mode": val}))
+        self.mode = val
 
     def _handle_command(self, chat_id: int, text: str) -> bool:
         """处理控制指令；返回 True 表示已处理（不回复）。"""
         t = text.strip().lower()
-        if t == "/quiet":
-            self._set_quiet(True)
-            logger.info("已开启免打扰（chat=%s）", chat_id)
-            return True
-        if t == "/active":
-            self._set_quiet(False)
-            logger.info("已关闭免打扰（chat=%s）", chat_id)
+        if t in ("/quiet", "/active", "/default"):
+            self._set_mode(t[1:])
+            logger.info("切换模式为 %s（chat=%s）", t[1:], chat_id)
             return True
         return False
 
     async def _state_watcher(self) -> None:
-        """每 30 秒刷新免打扰状态，让 plana quiet/active（CLI）也能即时生效。"""
+        """每 30 秒刷新模式状态，让 plana quiet/active/default（CLI）也能即时生效。"""
         while True:
             await asyncio.sleep(30)
             try:
-                self.quiet = self._load_quiet()
+                self.mode = self._load_mode()
             except Exception:
                 pass
 
@@ -161,7 +157,7 @@ class TelegramBot:
         """每 30 秒检查一次是否到了问候时刻（目标时刻起 5 分钟窗口内，当天只发一次）。"""
         while True:
             try:
-                if self.quiet:
+                if self.mode == "quiet":
                     await asyncio.sleep(60)
                     continue
                 now = datetime.now()
@@ -196,11 +192,13 @@ class TelegramBot:
                 logger.exception("发送语音失败")
         await self._maybe_send_emotion(chat_id, result.emotion)
 
-        # 追问：主回复后再补一句自然的追问（免打扰时关闭）
-        if self.cfg.behavior.get("follow_up", True) and not self.quiet:
+        # 追问：active 总是追问，default 动态决策，quiet 不追问
+        if self.cfg.behavior.get("follow_up", True) and self.mode != "quiet":
             try:
                 await asyncio.sleep(self.cfg.behavior.get("follow_up_delay", 4))
-                follow = await self.pipeline.follow_up(user_id, text, result.display_text)
+                follow = await self.pipeline.follow_up(
+                    user_id, text, result.display_text, dynamic=(self.mode == "default")
+                )
                 if follow:
                     await self.send_text(chat_id, follow)
                     await self.pipeline.store_assistant(user_id, follow)

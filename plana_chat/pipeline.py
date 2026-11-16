@@ -277,21 +277,40 @@ class PlanaPipeline:
             voice_wav = await self._voice(display_text)
         return ProcessResult(display_text=display_text, emotion=emotion, voice_wav=voice_wav)
 
-    async def follow_up(self, user_id: str, last_user: str, last_assistant: str) -> str | None:
-        """生成一句简短自然的追问，让对话继续。"""
-        prompt = (
-            "请再补一句简短、自然的追问或关心（一句话，尽量 15 字以内），"
-            "让对话继续。不要啰嗦、不要重复刚才的话、不要带情感标签。"
-        )
+    async def follow_up(self, user_id: str, last_user: str, last_assistant: str, dynamic: bool = False) -> str | None:
+        """生成一句简短自然的追问；dynamic=True 时由 LLM 动态判断是否需要追问。"""
         messages = [
             {"role": "system", "content": self._system_prompt()},
             {"role": "user", "content": last_user},
             {"role": "assistant", "content": last_assistant},
-            {"role": "user", "content": prompt},
         ]
-        raw = await self._chat_with_fallback(messages)
-        text = strip_emotion_tag(raw).strip()
-        return text or None
+        if dynamic:
+            messages.append({"role": "user", "content": (
+                "根据上面的对话，判断你是否需要再追问/关心一句：\n"
+                "- 若对话已自然收尾、或老师没有继续的意思，则不需要\n"
+                "- 若还想继续关心或推进话题，则输出一句简短自然的追问（15 字以内）\n"
+                '严格只输出 JSON：{"should": true, "text": "追问内容"} 或 {"should": false}'
+            )})
+            raw = await self._chat_with_fallback(messages)
+            m = re.search(r"\{.*\}", raw, re.S)
+            if not m:
+                return None
+            try:
+                data = json.loads(m.group(0))
+            except Exception:
+                return None
+            if not data.get("should"):
+                return None
+            text = str(data.get("text", "")).strip()
+            return text or None
+        else:
+            messages.append({"role": "user", "content": (
+                "请再补一句简短、自然的追问或关心（一句话，尽量 15 字以内），"
+                "让对话继续。不要啰嗦、不要重复刚才的话、不要带情感标签。"
+            )})
+            raw = await self._chat_with_fallback(messages)
+            text = strip_emotion_tag(raw).strip()
+            return text or None
 
     async def store_assistant(self, user_id: str, text: str, emotion: str | None = None) -> None:
         """把追问等补充回复也存入记忆（带 embedding）。"""
