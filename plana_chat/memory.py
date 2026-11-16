@@ -114,6 +114,17 @@ class MemoryStore:
             return None
         return datetime.strptime(row["created_at"], _TIME_FMT)
 
+    def last_message_time(self, user_id: str) -> datetime | None:
+        """最后一条消息（任意角色）的时间。"""
+        with self._lock, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT created_at FROM messages WHERE user_id=? ORDER BY id DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return datetime.strptime(row["created_at"], _TIME_FMT)
+
     # ── 记忆整理进度（不删原文，只标记已整理到的位置）──────────────────
     def consolidated_upto(self, user_id: str) -> int:
         with self._lock, closing(self._connect()) as conn:

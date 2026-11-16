@@ -143,8 +143,10 @@ class TelegramBot:
     async def _send_greeting(self) -> None:
         for chat_id in self.cfg.greeting.chat_ids:
             try:
-                await self.send_chat_action(chat_id, "typing")
                 result = await self.pipeline.greet(str(chat_id))
+                if result is None:
+                    logger.info("跳过问候：最近有进行中对话 chat=%s", chat_id)
+                    continue
                 mode = self.cfg.reply.mode
                 if mode in ("text_voice", "text"):
                     await self.send_text(chat_id, result.display_text)

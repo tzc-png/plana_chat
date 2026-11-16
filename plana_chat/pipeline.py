@@ -265,20 +265,35 @@ class PlanaPipeline:
         exclude = self.cfg.memory.rounds * 2
         return self.memory.search_similar(user_id, user_emb, limit=top_k, exclude_recent=exclude)
 
-    async def greet(self, user_id: str) -> ProcessResult:
-        """生成一条主动问候（早/晚，文案由 LLM 即时生成、不固定）。"""
-        hour = datetime.now().hour
-        if 5 <= hour < 12:
-            hint = "现在已经是早上了。请主动给老师发一句早安问候，简短自然（2~3 句），可以关心一下老师今天的状态或计划。"
-        elif hour >= 18:
-            hint = "现在已经是晚上了。请主动给老师发一句晚安问候，简短温柔（2~3 句），可以提醒老师早点休息。"
-        else:
-            hint = "请主动给老师发一句简短的问候。"
+    async def greet(self, user_id: str) -> ProcessResult | None:
+        """上下文感知的主动问候；最近有进行中对话时返回 None（跳过）。"""
+        now = datetime.now()
 
-        # 前一天未完成/未聊完的事，自然地带一句关心
+        # 最近 30 分钟内有对话（进行中）→ 跳过定时问候
+        last_time = self.memory.last_message_time(user_id)
+        if last_time is not None and (now - last_time).total_seconds() < 30 * 60:
+            logger.info("跳过主动问候：最近有进行中对话 user=%s", user_id)
+            return None
+
+        hour = now.hour
+        period = "早上" if 5 <= hour < 12 else ("晚上" if hour >= 18 else "现在")
+        recent = self.memory.recent(user_id, self.cfg.memory.rounds)
+        background = self._format_msgs(recent[-6:]) if recent else "（暂无历史，这是第一次问候）"
+
+        hint = (
+            f"现在是 {now.strftime('%H:%M')}（{period}）。请主动给老师发一句问候，"
+            "并参考下面的「最近对话背景」判断情境、做出合理反应：\n"
+            "- 若最近老师已说过晚安/要睡了，就不要再道晚安，可演绎成「偷偷开门看了一眼，老师已经睡着了」之类的轻声自言自语\n"
+            "- 若最近老师提到生病、不舒服、熬夜、加班等，要表现出关心\n"
+            "- 若没有特殊情况，就按当前时间自然问候\n"
+            "问候要简短自然，动作可写在括号里，末尾加情感标签 [emotion:xxx]。\n\n"
+            f"【最近对话背景】\n{background}\n\n"
+            "只输出问候内容。"
+        )
+
         open_items = self.memory.recent_open_items(user_id, limit=3)
         if open_items:
-            hint += "\n\n另外，老师之前提到过这些还没完成/还没聊完的事，可以顺带自然地关心一句（不要生硬复述）：" + "；".join(open_items)
+            hint += "\n\n另外老师之前提到这些还没完成的事，可自然带一句关心（不要生硬）：" + "；".join(open_items)
 
         messages = [
             {"role": "system", "content": self._system_prompt()},
