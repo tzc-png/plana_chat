@@ -14,7 +14,7 @@
 - **三种模式**：`default`（默认，追问动态决策）/ `active`（总是追问）/ `quiet`（免打扰），聊天 `/quiet` `/active` `/default` 或 PC `plana quiet/active/default` 切换
 - **情感表情图**：按回复情感自动发对应立绘表情图（可自备图片）
 - **智能搜索**（可选）：问实时/事实性问题时联网搜索再回答
-- **引擎可切换**：云端 DeepSeek（默认）或本地 Ollama，云端失败自动降级
+- **引擎可切换与自动降级**：云端 DeepSeek（默认）或本地 Ollama；云端余额不足/失败时自动切本地，日志红色高亮提示
 - **命令行管理**：`plana on/off/system_on/...` 一条命令启停，可做成开机自启
 
 ## 架构
@@ -241,6 +241,7 @@ plana help                 # 查看所有指令
 
 - **代理**：Telegram 国内被墙，机器人服务器端和手机端都要能连上（`telegram.proxy` 填你自己的代理）
 - **显存**：语音引擎约占 1GB 显存；若切本地 Ollama，注意与语音引擎的显存争抢，必要时 `ollama stop` 释放
+- **容错降级**：DeepSeek 余额不足/不可用时，自动切本地 Ollama（对话用 qwen2.5、翻译用 translategemma），并在 `data/plana.log` 中以红色高亮提示（`tail -f data/plana.log` 可见）；`plana status` 可查看运行方式（systemd/后台进程）
 - **音色**：本项目语音模型仅支持日语，中文回复会先翻译成日语再合成语音
 - **账号风险**：用真实 Telegram 账号注册机器人（BotFather）本身无风险，但第三方代理需自行合规使用
 
