@@ -57,6 +57,7 @@ reply:
 telegram:
   token_env: "TELEGRAM_BOT_TOKEN"
   proxy: "http://127.0.0.1:7897"   # 本机 Clash Verge 代理；直连可留空
+  allow_user_ids: [9045953592]     # 白名单；留空（[]）则所有人可用
 
 behavior:
   mode: default                    # default | active | quiet（默认 default）

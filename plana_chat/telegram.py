@@ -131,6 +131,13 @@ class TelegramBot:
             return True
         return False
 
+    def _is_allowed(self, user_id: str) -> bool:
+        """白名单检查；列表为空则不限制。"""
+        allow = self.cfg.telegram.get("allow_user_ids", [])
+        if not allow:
+            return True
+        return user_id in {str(u) for u in allow}
+
     async def _state_watcher(self) -> None:
         """每 30 秒刷新模式状态，让 plana quiet/active/default（CLI）也能即时生效。"""
         while True:
@@ -227,6 +234,11 @@ class TelegramBot:
                     user_id = str(msg.get("from", {}).get("id", chat_id))
                     text = msg["text"].strip()
                     if not text:
+                        continue
+                    if not self._is_allowed(user_id):
+                        logger.warning(
+                            "\033[31m[拦截] 非白名单用户访问已忽略（user=%s）\033[0m", user_id
+                        )
                         continue
                     logger.info("[tg] chat=%s: %s", chat_id, text)
                     try:

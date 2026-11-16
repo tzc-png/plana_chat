@@ -189,7 +189,7 @@ plana help                 # 查看所有指令
 | | `compact_threshold` | 未整理消息数超该值触发「总结压缩 + 事实抽取」 |
 | | `embedding_model` / `retrieve_top_k` | 语义检索用的 embedding 模型 / 注入的历史条数 |
 | `reply` | `mode` | `text_voice`（文字+语音，默认）/ `voice` / `text` |
-| `telegram` | `token_env` / `proxy` | token 的环境变量名 / 代理地址 |
+| `telegram` | `token_env` / `proxy` / `allow_user_ids` | token 环境变量名 / 代理地址 / 用户白名单（空=不限制） |
 | `greeting` | `enabled` / `times` / `chat_ids` | 主动问候开关 / 时刻 / 目标用户 |
 | `behavior` | `mode` / `follow_up` / `follow_up_delay` | 运行模式（default/active/quiet）/ 追问开关 / 追问延迟（秒） |
 | `emotion` | `enabled` / `image_dir` | 表情图开关（默认关）/ 表情图目录（见下） |
