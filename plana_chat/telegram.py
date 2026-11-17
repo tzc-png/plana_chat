@@ -289,6 +289,10 @@ class TelegramBot:
                         user_id, text, display_text, dynamic=(self.mode == "default")
                     )
                     if follow:
+                        try:
+                            follow, _ = await self.pipeline.self_review(user_id, text, follow, "neutral")
+                        except Exception:
+                            logger.warning("追问自检失败，保留原文", exc_info=True)
                         await self.send_text(chat_id, follow)
                         await self.pipeline.store_assistant(user_id, follow)
             except Exception:

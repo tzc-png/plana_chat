@@ -176,7 +176,10 @@ class PlanaPipeline:
             "2. 不合时宜（老师说要工作/休息/安静，回复却在打扰或发起互动）\n"
             "3. 不符合普拉娜克制、安静、情感陪伴的性格\n\n"
             f"【前面的对话】\n{context}\n\n"
-            f"【老师刚说】{user_text}\n\n"
+        )
+        if user_text:
+            prompt += f"【老师刚说】{user_text}\n\n"
+        prompt += (
             f"【待审查的回复】\n{display_text}\n\n"
             "只输出最终要发送的回复（保持情感标签 [emotion:xxx] 格式）。"
         )
@@ -334,6 +337,12 @@ class PlanaPipeline:
 
         emotion = extract_emotion(raw)
         display_text = strip_emotion_tag(raw)
+
+        # 主动问候也自检
+        try:
+            display_text, emotion = await self.self_review(user_id, "", display_text, emotion)
+        except Exception:
+            logger.warning("问候自检失败，保留原文", exc_info=True)
 
         # 主动问候也存入记忆（作为 assistant 消息，带 embedding）
         await self.store_assistant(user_id, display_text, emotion)
