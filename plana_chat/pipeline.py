@@ -166,6 +166,31 @@ class PlanaPipeline:
             return await self._voice(display_text)
         return None
 
+    async def self_review(self, user_id: str, user_text: str, display_text: str, emotion: str) -> tuple[str, str]:
+        """回复自检：检查与上下文是否矛盾/不合时宜，有问题则修正。"""
+        recent = self.memory.recent(user_id, 3)
+        context = self._format_msgs(recent) if recent else "（无）"
+        prompt = (
+            "请审查下面这条即将发送给老师的回复。只有当你发现它存在以下问题时才修改，否则原样输出：\n"
+            "1. 与前面对话上下文矛盾、前后不一致\n"
+            "2. 不合时宜（老师说要工作/休息/安静，回复却在打扰或发起互动）\n"
+            "3. 不符合普拉娜克制、安静、情感陪伴的性格\n\n"
+            f"【前面的对话】\n{context}\n\n"
+            f"【老师刚说】{user_text}\n\n"
+            f"【待审查的回复】\n{display_text}\n\n"
+            "只输出最终要发送的回复（保持情感标签 [emotion:xxx] 格式）。"
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt()},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        new_emotion = extract_emotion(raw)
+        new_text = strip_emotion_tag(raw)
+        if not new_text:
+            return display_text, emotion
+        return new_text, new_emotion
+
     async def _chat_with_fallback(self, messages: list[dict]) -> str:
         try:
             return await self.llm.chat(messages)

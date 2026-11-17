@@ -233,11 +233,20 @@ class TelegramBot:
             display_text, emotion = await self.pipeline.generate(user_id, combined)
             text = combined
 
-        # 4. 生成语音 + 存储
+        # 4. 回复自检（检查矛盾/不合时宜，有问题则修正）
+        if self.cfg.behavior.get("self_review", True):
+            try:
+                display_text, emotion = await self.pipeline.self_review(
+                    user_id, text, display_text, emotion
+                )
+            except Exception:
+                logger.warning("回复自检失败，保留原文", exc_info=True)
+
+        # 5. 生成语音 + 存储
         voice_wav = await self.pipeline.make_voice(display_text)
         await self.pipeline.store(user_id, text, display_text, emotion)
 
-        # 5. 发送
+        # 6. 发送
         mode = self.cfg.reply.mode
         if mode in ("text_voice", "text"):
             await self.send_text(chat_id, display_text)

@@ -64,6 +64,7 @@ behavior:
   follow_up: true                  # 追问总开关
   follow_up_delay: 4               # 追问延迟（秒）
   settle_delay: 1.5                # 发送前等待（秒），让用户正在输入的消息有时间到达再合并
+  self_review: true                # 回复自检：检查矛盾/不合时宜，有问题则修正
 
 greeting:
   enabled: true
