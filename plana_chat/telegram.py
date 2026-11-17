@@ -228,9 +228,13 @@ class TelegramBot:
         while True:
             try:
                 updates = await self.get_updates()
-                for upd in updates:
+                i = 0
+                n = len(updates)
+                while i < n:
+                    upd = updates[i]
                     self.offset = upd["update_id"] + 1
                     msg = upd.get("message")
+                    i += 1
                     if not msg or "text" not in msg:
                         continue
                     chat_id = msg["chat"]["id"]
@@ -243,9 +247,24 @@ class TelegramBot:
                             "\033[31m[拦截] 非白名单用户访问已忽略（user=%s）\033[0m", user_id
                         )
                         continue
-                    logger.info("[老师] chat=%s: %s", chat_id, text)
+                    # 合并同一用户短时间内（60 秒内）的连续消息，一并回复
+                    parts = [text]
+                    ts = msg.get("date", 0)
+                    while i < n:
+                        nmsg = updates[i].get("message")
+                        if not (nmsg and "text" in nmsg):
+                            break
+                        nuser = str(nmsg.get("from", {}).get("id", nmsg.get("chat", {}).get("id")))
+                        if nuser == user_id and 0 <= abs(nmsg.get("date", 0) - ts) <= 60:
+                            parts.append(nmsg["text"].strip())
+                            self.offset = updates[i]["update_id"] + 1
+                            i += 1
+                        else:
+                            break
+                    combined = "\n".join(p for p in parts if p)
+                    logger.info("[老师] chat=%s: %s", chat_id, combined)
                     try:
-                        await self.handle_text(chat_id, user_id, text)
+                        await self.handle_text(chat_id, user_id, combined)
                     except Exception:
                         logger.exception("处理消息失败 chat=%s", chat_id)
                         try:
