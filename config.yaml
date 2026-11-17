@@ -40,7 +40,7 @@ tts:
   log_path: "data/tts.log"
 
 character:
-  persona_file: "plana_chat/character/plana_compromise.txt"   # 折中版人格；可换回 plana.txt
+  persona_file: "plana_chat/character/plana.txt"           # 基础人格（各阶段在此基础上追加关系指令）
   holidays_file: "plana_chat/character/holidays.txt"           # 节日配置（早上问候时提示）
 
 memory:

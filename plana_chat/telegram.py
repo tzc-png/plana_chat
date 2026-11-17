@@ -261,6 +261,28 @@ class TelegramBot:
             except Exception:
                 logger.warning("回复自检失败，保留原文", exc_info=True)
 
+        # 4.5 情感自检（独立：情感标签是否符合当前关系阶段）
+        try:
+            rel_before = self.pipeline.memory.get_relationship(user_id)
+            emotion = await self.pipeline._emotion_review(
+                user_id, rel_before["stage"], display_text, emotion
+            )
+        except Exception:
+            logger.warning("情感自检失败，保留原情感", exc_info=True)
+
+        # 4.6 更新好感度与阶段；特殊情绪挂起
+        self.pipeline._update_relationship(user_id, emotion)
+        self.pipeline._handle_special_emotion(user_id, emotion)
+
+        # 4.7 关系升级申请检测（喜欢→恋爱 / 恋爱→结婚）
+        try:
+            await self.pipeline._handle_application(user_id, text)
+        except Exception:
+            logger.warning("关系申请判断失败", exc_info=True)
+
+        # 4.8 话题过期处理（特殊情绪 3 天未消失则消失并 -6）
+        self.pipeline._expire_topics(user_id)
+
         # 5. 生成语音 + 存储
         voice_wav = await self.pipeline.make_voice(display_text)
         await self.pipeline.store(user_id, text, display_text, emotion)

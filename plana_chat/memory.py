@@ -67,6 +67,28 @@ class MemoryStore:
                 )"""
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_user ON facts(user_id, type, id)")
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS relationship (
+                    user_id TEXT PRIMARY KEY,
+                    affinity INTEGER NOT NULL DEFAULT 0,
+                    stage TEXT NOT NULL DEFAULT '陌生',
+                    love_date TEXT,
+                    marriage_date TEXT
+                )"""
+            )
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS topics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    importance INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )"""
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_topics_user ON topics(user_id, status, id)")
             # 旧库迁移：补列
             self._ensure_column(conn, "messages", "embedding", "BLOB")
             self._ensure_column(conn, "summaries", "consolidated_upto", "INTEGER NOT NULL DEFAULT 0")
@@ -205,6 +227,107 @@ class MemoryStore:
                 (user_id, since, limit),
             ).fetchall()
         return [r["content"] for r in rows]
+
+    # ── 关系（好感度 + 阶段）────────────────────────────────────────────
+    def get_relationship(self, user_id: str) -> dict:
+        with self._lock, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT affinity, stage, love_date, marriage_date FROM relationship WHERE user_id=?",
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return {"affinity": 0, "stage": "陌生", "love_date": None, "marriage_date": None}
+        return {
+            "affinity": row["affinity"],
+            "stage": row["stage"],
+            "love_date": row["love_date"],
+            "marriage_date": row["marriage_date"],
+        }
+
+    def update_affinity(self, user_id: str, delta: int) -> int:
+        """好感度增减（下限 0），返回最新好感度。"""
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO relationship(user_id, affinity) VALUES(?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET affinity=MAX(0, affinity+excluded.affinity)",
+                (user_id, max(0, delta)),
+            )
+            conn.commit()
+        return self.get_relationship(user_id)["affinity"]
+
+    def set_stage(self, user_id: str, stage: str) -> None:
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO relationship(user_id, stage) VALUES(?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET stage=excluded.stage",
+                (user_id, stage),
+            )
+            conn.commit()
+
+    def set_milestone(self, user_id: str, field: str, date_str: str) -> None:
+        """设置关系里程碑日期（field: love_date / marriage_date）。"""
+        if field not in ("love_date", "marriage_date"):
+            return
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                f"INSERT INTO relationship(user_id, {field}) VALUES(?,?) "
+                f"ON CONFLICT(user_id) DO UPDATE SET {field}=excluded.{field}",
+                (user_id, date_str),
+            )
+            conn.commit()
+
+    # ── 话题表 ──────────────────────────────────────────────────────────
+    def add_topic(self, user_id: str, type_: str, content: str, importance: int = 1) -> None:
+        now = datetime.now().strftime(_TIME_FMT)
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO topics(user_id, type, content, status, importance, created_at, updated_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (user_id, type_, content, "open", importance, now, now),
+            )
+            conn.commit()
+
+    def get_open_topics(self, user_id: str, type_: str | None = None, limit: int = 5) -> list[dict]:
+        with self._lock, closing(self._connect()) as conn:
+            if type_:
+                rows = conn.execute(
+                    "SELECT id, type, content, importance FROM topics "
+                    "WHERE user_id=? AND status='open' AND type=? ORDER BY importance DESC, id DESC LIMIT ?",
+                    (user_id, type_, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, type, content, importance FROM topics "
+                    "WHERE user_id=? AND status='open' ORDER BY importance DESC, id DESC LIMIT ?",
+                    (user_id, limit),
+                ).fetchall()
+        return [
+            {"id": r["id"], "type": r["type"], "content": r["content"], "importance": r["importance"]}
+            for r in rows
+        ]
+
+    def get_open_emotions(self, user_id: str, limit: int = 5) -> list[dict]:
+        """普拉娜挂起的特殊情绪（吃醋/黑化等）。"""
+        return self.get_open_topics(user_id, type_="plana_emotion", limit=limit)
+
+    def close_topic(self, topic_id: int) -> None:
+        now = datetime.now().strftime(_TIME_FMT)
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute("UPDATE topics SET status='closed', updated_at=? WHERE id=?", (now, topic_id))
+            conn.commit()
+
+    def expire_open_topics(self, user_id: str, days: int = 3) -> list[dict]:
+        """把超过 N 天仍未关闭的 open 话题标记为 closed，并返回（供调用方处理）。"""
+        since = (datetime.now() - timedelta(days=days)).strftime(_TIME_FMT)
+        with self._lock, closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT id, type, content FROM topics WHERE user_id=? AND status='open' AND created_at<?",
+                (user_id, since),
+            ).fetchall()
+            for r in rows:
+                conn.execute("UPDATE topics SET status='closed' WHERE id=?", (r["id"],))
+            conn.commit()
+        return [{"id": r["id"], "type": r["type"], "content": r["content"]} for r in rows]
 
     # ── 向量语义检索 ───────────────────────────────────────────────────────
     def search_similar(

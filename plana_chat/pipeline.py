@@ -36,6 +36,34 @@ def _should_search(text: str) -> bool:
     return any(k in text for k in _SEARCH_KEYWORDS)
 
 
+# 好感度加减分（普拉娜输出的情感标签 → 分数）
+EMOTION_SCORES = {
+    "neutral": 0,
+    "like": 2,
+    "love": 3,
+    "sheepish": 1,
+    "delighted": 2,
+    "cheerful": 1,
+    "expectant": 1,
+    "puzzled": 0,
+    "dumbfounded": -1,
+    "sulky": 0,
+    "jealous": -1,
+}
+
+# 每阶段的关系指令（追加在基础人格之后，含阶段专属动作）
+STAGE_PROMPTS = {
+    "陌生": "【当前关系】你们刚认识。保持礼貌克制，带一点疏离感，会偷偷观察老师。动作克制，不主动肢体接触，也不说太亲昵的话。",
+    "熟悉": "【当前关系】你们已经熟悉了。可以放松自然，偶尔主动关心，有一些小习惯。动作可以轻微自然（递东西、并肩走），但保持分寸。",
+    "喜欢": "【当前关系】你对老师有好感，会不自觉地多在意、多关心，偶尔害羞、口是心非。动作可以有轻微的身体靠近，但还不敢太亲昵。",
+    "恋爱": "【当前关系】你们是恋人（热恋期）。亲昵、依赖、撒娇都自然，会想黏着老师；动作可以牵手、挽手臂、靠肩、拥抱。保留普拉娜克制的底色。",
+    "结婚": "【当前关系】你们已经结婚。稳定默契、安心自然，偶尔流露老夫老妻的平淡幸福。动作自然亲密，不再羞涩。",
+}
+
+# 阶段阈值（好感度达到才可进入该阶段）
+STAGE_THRESHOLDS = {"陌生": 0, "熟悉": 11, "喜欢": 31, "恋爱": 61, "结婚": 101}
+
+
 @dataclass
 class ProcessResult:
     display_text: str
@@ -60,9 +88,14 @@ class PlanaPipeline:
         self.persona_template = persona_file.read_text(encoding="utf-8")
 
     # ── prompt 构建 ──────────────────────────────────────────────────────────
-    def _system_prompt(self) -> str:
+    def _system_prompt(self, user_id: str) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return self.persona_template.replace("{current_time}", now)
+        base = self.persona_template.replace("{current_time}", now)
+        rel = self.memory.get_relationship(user_id)
+        stage_instruction = STAGE_PROMPTS.get(rel["stage"], "")
+        if stage_instruction:
+            return base + "\n\n" + stage_instruction
+        return base
 
     @staticmethod
     def _period(hour: int) -> str:
@@ -111,7 +144,7 @@ class PlanaPipeline:
             except Exception:
                 logger.warning("联网搜索失败，降级为普通回复", exc_info=True)
 
-        messages = [{"role": "system", "content": self._system_prompt()}]
+        messages = [{"role": "system", "content": self._system_prompt(user_id)}]
 
         # 注入长期记忆：摘要 + 事实 + 未完成项
         summary = self.memory.get_summary(user_id)
@@ -184,7 +217,7 @@ class PlanaPipeline:
             "只输出最终要发送的回复（保持情感标签 [emotion:xxx] 格式）。"
         )
         messages = [
-            {"role": "system", "content": self._system_prompt()},
+            {"role": "system", "content": self._system_prompt(user_id)},
             {"role": "user", "content": prompt},
         ]
         raw = await self._chat_with_fallback(messages)
@@ -297,6 +330,114 @@ class PlanaPipeline:
         exclude = self.cfg.memory.rounds * 2
         return self.memory.search_similar(user_id, user_emb, limit=top_k, exclude_recent=exclude)
 
+    # ── 关系系统（好感度 + 阶段 + 申请）─────────────────────────────────
+    def _compute_stage(self, affinity: int, current_stage: str) -> str:
+        if current_stage == "结婚":
+            return "结婚"  # 锁定，不降
+        if current_stage == "恋爱" and affinity < STAGE_THRESHOLDS["恋爱"]:
+            return "喜欢"
+        if current_stage == "喜欢" and affinity < STAGE_THRESHOLDS["喜欢"]:
+            return "熟悉"
+        if current_stage == "熟悉" and affinity < STAGE_THRESHOLDS["熟悉"]:
+            return "陌生"
+        if current_stage == "陌生" and affinity >= STAGE_THRESHOLDS["熟悉"]:
+            return "熟悉"
+        if current_stage == "熟悉" and affinity >= STAGE_THRESHOLDS["喜欢"]:
+            return "喜欢"
+        return current_stage
+
+    def _update_relationship(self, user_id: str, emotion: str) -> dict:
+        """根据情感标签更新好感度与阶段（自动升降级）。"""
+        rel = self.memory.get_relationship(user_id)
+        stage = rel["stage"]
+        delta = EMOTION_SCORES.get(emotion, 0) + 1  # 基础 +1
+        if stage == "结婚" and delta < 0:
+            delta = 0  # 结婚后好感度不下降
+        new_affinity = self.memory.update_affinity(user_id, delta)
+        new_stage = self._compute_stage(new_affinity, stage)
+        if new_stage != stage:
+            self.memory.set_stage(user_id, new_stage)
+            logger.info("关系阶段变化：%s → %s（好感度 %d）", stage, new_stage, new_affinity)
+        return self.memory.get_relationship(user_id)
+
+    async def _check_application(self, user_id: str, user_text: str, desc: str) -> bool:
+        """判断老师这句话是否在明确认真地申请升级关系。"""
+        prompt = (
+            f"普拉娜当前与老师的关系阶段即将可以{desc}，好感度已满足条件。\n"
+            f"请判断老师下面这句话，是否在明确、认真地表达「想和普拉娜{desc}」的意愿。\n"
+            "注意：必须是明确认真的表达（如「我们在一起吧」「嫁给我」）；开玩笑、暧昧、无关的话都不算。\n\n"
+            f"老师的话：{user_text}\n\n"
+            '严格只输出 JSON：{"apply": true} 或 {"apply": false}'
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return False
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return False
+        return bool(data.get("apply"))
+
+    async def _handle_application(self, user_id: str, user_text: str) -> bool:
+        """处理关系升级申请（喜欢→恋爱 / 恋爱→结婚）。"""
+        rel = self.memory.get_relationship(user_id)
+        stage, affinity = rel["stage"], rel["affinity"]
+        if stage == "喜欢" and affinity >= STAGE_THRESHOLDS["恋爱"]:
+            target, desc = "恋爱", "成为恋人"
+        elif stage == "恋爱" and affinity >= STAGE_THRESHOLDS["结婚"]:
+            target, desc = "结婚", "结婚"
+        else:
+            return False
+        if not await self._check_application(user_id, user_text, desc):
+            return False
+        today = datetime.now().strftime("%Y-%m-%d")
+        if target == "恋爱":
+            self.memory.set_stage(user_id, "恋爱")
+            self.memory.update_affinity(user_id, 80 - affinity)  # 拉到 80 热恋期
+            self.memory.set_milestone(user_id, "love_date", today)
+            logger.info("❤️ 关系升级：喜欢 → 恋爱（好感度 80）")
+        else:
+            self.memory.set_stage(user_id, "结婚")
+            self.memory.set_milestone(user_id, "marriage_date", today)
+            logger.info("💍 关系升级：恋爱 → 结婚")
+        return True
+
+    async def _emotion_review(self, user_id: str, stage: str, display_text: str, emotion: str) -> str:
+        """独立的情感自检：情感标签是否符合当前关系阶段，不合适则修正。"""
+        prompt = (
+            f"普拉娜当前与老师的关系阶段是「{stage}」。她刚回复了一句话，情感标签是 [{emotion}]。\n"
+            "请判断这个情感标签是否符合当前关系阶段：\n"
+            "- 陌生/熟悉阶段不应输出 love 等过度亲密的标签\n"
+            "- 恋爱/结婚阶段可以更亲昵\n"
+            "- 不符合就给出更合适的标签，符合就原样输出\n\n"
+            f"回复内容：{display_text}\n当前标签：{emotion}\n\n"
+            "只输出一个标签名（neutral/sheepish/love/sulky/jealous/expectant/dumbfounded/delighted/cheerful/puzzled/like）。"
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        new_emotion = raw.strip()
+        return new_emotion if new_emotion in EMOTION_SCORES else emotion
+
+    def _handle_special_emotion(self, user_id: str, emotion: str) -> None:
+        """吃醋/黑化等特殊情绪挂起到话题表（高优先级）。"""
+        if emotion in ("sulky", "jealous"):
+            self.memory.add_topic(user_id, "plana_emotion", f"普拉娜{emotion}", importance=3)
+
+    def _expire_topics(self, user_id: str, days: int = 3) -> None:
+        """过期未消失的话题处理：情绪类话题消失时好感度 -6。"""
+        for t in self.memory.expire_open_topics(user_id, days=days):
+            if t["type"] == "plana_emotion":
+                self.memory.update_affinity(user_id, -6)
+                logger.info("特殊情绪「%s」过期消失，好感度 -6", t["content"])
+
     def _holiday_today(self, now: datetime) -> str | None:
         """返回今天的节日名（无则 None）。"""
         f = Path(self.cfg.character.get("holidays_file", "plana_chat/character/holidays.txt"))
@@ -352,17 +493,27 @@ class PlanaPipeline:
             "只输出问候内容。"
         )
 
-        # 节日提示（仅早上问候时）
-        holiday = self._holiday_today(now)
-        if holiday and period == "早上":
-            hint += f"\n\n另外，今天是「{holiday}」，请顺带一句应景的节日祝福或问候。"
+        # 纪念日/节日提示（仅早上问候时；纪念日优先）
+        if period == "早上":
+            rel = self.memory.get_relationship(user_id)
+            today_key = now.strftime("%m-%d")
+            anniversary = None
+            if rel.get("love_date") and rel["love_date"][5:] == today_key:
+                anniversary = "和老师在一起的纪念日"
+            elif rel.get("marriage_date") and rel["marriage_date"][5:] == today_key:
+                anniversary = "结婚纪念日"
+            holiday = self._holiday_today(now)
+            if anniversary:
+                hint += f"\n\n另外，今天是{anniversary}，请用更郑重、甜蜜的方式祝福。"
+            elif holiday:
+                hint += f"\n\n另外，今天是「{holiday}」，请顺带一句应景的节日祝福或问候。"
 
         open_items = self.memory.recent_open_items(user_id, limit=3)
         if open_items:
             hint += "\n\n另外老师之前提到这些还没完成的事，可自然带一句关心（不要生硬）：" + "；".join(open_items)
 
         messages = [
-            {"role": "system", "content": self._system_prompt()},
+            {"role": "system", "content": self._system_prompt(user_id)},
             {"role": "user", "content": hint},
         ]
         raw = await self._chat_with_fallback(messages)
@@ -387,7 +538,7 @@ class PlanaPipeline:
     async def follow_up(self, user_id: str, last_user: str, last_assistant: str, dynamic: bool = False) -> str | None:
         """生成一句简短自然的追问；dynamic=True 时由 LLM 动态判断是否需要追问。"""
         messages = [
-            {"role": "system", "content": self._system_prompt()},
+            {"role": "system", "content": self._system_prompt(user_id)},
             {"role": "user", "content": last_user},
             {"role": "assistant", "content": last_assistant},
         ]
