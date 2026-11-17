@@ -5,6 +5,7 @@ import asyncio
 import json
 import logging
 import random
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -141,6 +142,28 @@ class TelegramBot:
             return True
         return user_id in {str(u) for u in allow}
 
+    async def _drain_recent_user_messages(self, user_id: str, within_seconds: int = 15) -> list[str]:
+        """发送前检查：消费该用户最近 N 秒内新发来的消息（用于合并重答）。"""
+        now = time.time()
+        async with self._client() as client:
+            resp = await client.get(
+                f"{self.api}/getUpdates",
+                params={"offset": self.offset, "timeout": 0},
+            )
+            resp.raise_for_status()
+            updates = resp.json().get("result", [])
+        texts = []
+        for upd in updates:
+            self.offset = max(self.offset, upd["update_id"] + 1)
+            msg = upd.get("message")
+            if not msg or "text" not in msg:
+                continue
+            muser = str(msg.get("from", {}).get("id", msg.get("chat", {}).get("id")))
+            if muser != user_id or now - msg.get("date", 0) > within_seconds:
+                continue
+            texts.append(msg["text"].strip())
+        return texts
+
     async def _state_watcher(self) -> None:
         """每 30 秒刷新模式状态，让 plana quiet/active/default（CLI）也能即时生效。"""
         while True:
@@ -193,25 +216,40 @@ class TelegramBot:
             return
 
         await self.send_chat_action(chat_id, "typing")
-        result = await self.pipeline.process(user_id, text)
 
+        # 1. 生成回复（暂不存储）
+        display_text, emotion = await self.pipeline.generate(user_id, text)
+
+        # 2. 发送前检查是否有新消息（用户连续发消息时合并重答）
+        new_texts = await self._drain_recent_user_messages(user_id)
+        if new_texts:
+            combined = text + "\n" + "\n".join(new_texts)
+            logger.info("[老师] 合并新消息：%s", " | ".join(new_texts))
+            display_text, emotion = await self.pipeline.generate(user_id, combined)
+            text = combined
+
+        # 3. 生成语音 + 存储
+        voice_wav = await self.pipeline.make_voice(display_text)
+        await self.pipeline.store(user_id, text, display_text, emotion)
+
+        # 4. 发送
         mode = self.cfg.reply.mode
         if mode in ("text_voice", "text"):
-            await self.send_text(chat_id, result.display_text)
-        if mode in ("text_voice", "voice") and result.voice_wav:
+            await self.send_text(chat_id, display_text)
+        if mode in ("text_voice", "voice") and voice_wav:
             try:
-                ogg = await asyncio.to_thread(wav_to_ogg_opus, result.voice_wav)
+                ogg = await asyncio.to_thread(wav_to_ogg_opus, voice_wav)
                 await self.send_voice(chat_id, ogg)
             except Exception:
                 logger.exception("发送语音失败")
-        await self._maybe_send_emotion(chat_id, result.emotion)
+        await self._maybe_send_emotion(chat_id, emotion)
 
         # 追问：active 总是追问，default 动态决策，quiet 不追问
         if self.cfg.behavior.get("follow_up", True) and self.mode != "quiet":
             try:
                 await asyncio.sleep(self.cfg.behavior.get("follow_up_delay", 4))
                 follow = await self.pipeline.follow_up(
-                    user_id, text, result.display_text, dynamic=(self.mode == "default")
+                    user_id, text, display_text, dynamic=(self.mode == "default")
                 )
                 if follow:
                     await self.send_text(chat_id, follow)
@@ -228,11 +266,13 @@ class TelegramBot:
         while True:
             try:
                 updates = await self.get_updates()
+                # 一次性确认整个批次，避免发送前 drain 重复拉取
+                if updates:
+                    self.offset = max(u["update_id"] for u in updates) + 1
                 i = 0
                 n = len(updates)
                 while i < n:
                     upd = updates[i]
-                    self.offset = upd["update_id"] + 1
                     msg = upd.get("message")
                     i += 1
                     if not msg or "text" not in msg:
@@ -257,7 +297,6 @@ class TelegramBot:
                         nuser = str(nmsg.get("from", {}).get("id", nmsg.get("chat", {}).get("id")))
                         if nuser == user_id and 0 <= abs(nmsg.get("date", 0) - ts) <= 60:
                             parts.append(nmsg["text"].strip())
-                            self.offset = updates[i]["update_id"] + 1
                             i += 1
                         else:
                             break

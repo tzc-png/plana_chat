@@ -90,7 +90,8 @@ class PlanaPipeline:
         return ""
 
     # ── 主流程 ──────────────────────────────────────────────────────────────
-    async def process(self, user_id: str, user_text: str) -> ProcessResult:
+    async def generate(self, user_id: str, user_text: str) -> tuple[str, str]:
+        """生成回复（不存储）：返回 (display_text, emotion)。"""
         await self._maybe_consolidate(user_id)
         history = self.memory.recent(user_id, self.cfg.memory.rounds)
         user_emb = await self._embed(user_text)
@@ -150,17 +151,20 @@ class PlanaPipeline:
 
         emotion = extract_emotion(raw)
         display_text = strip_emotion_tag(raw)
+        return display_text, emotion
 
-        # 存储（带 embedding，原文永久保留）
+    async def store(self, user_id: str, user_text: str, display_text: str, emotion: str) -> None:
+        """存储一轮对话（带 embedding，原文永久保留）。"""
+        user_emb = await self._embed(user_text)
         self.memory.add(user_id, "user", user_text, embedding=user_emb)
         assistant_emb = await self._embed(display_text)
         self.memory.add(user_id, "assistant", display_text, emotion, embedding=assistant_emb)
 
-        voice_wav = None
-        mode = self.cfg.reply.mode
-        if mode in ("text_voice", "voice"):
-            voice_wav = await self._voice(display_text)
-        return ProcessResult(display_text=display_text, emotion=emotion, voice_wav=voice_wav)
+    async def make_voice(self, display_text: str) -> bytes | None:
+        """生成语音（WAV 字节）；纯文字模式返回 None。"""
+        if self.cfg.reply.mode in ("text_voice", "voice"):
+            return await self._voice(display_text)
+        return None
 
     async def _chat_with_fallback(self, messages: list[dict]) -> str:
         try:
