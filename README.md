@@ -195,7 +195,7 @@ plana help                 # 查看所有指令
 | `reply` | `mode` | `text_voice`（文字+语音，默认）/ `voice` / `text` |
 | `telegram` | `token_env` / `proxy` / `allow_user_ids` | token 环境变量名 / 代理地址 / 用户白名单（空=不限制） |
 | `greeting` | `enabled` / `times` / `chat_ids` / `reminder_minutes` | 主动问候开关 / 时刻 / 目标用户 / 重新提醒间隔（分钟） |
-| `behavior` | `mode` / `follow_up` / `settle_delay` / `self_review` | 运行模式 / 话题续接开关 / 发送前等待（秒）/ 文本与情感自检开关 |
+| `behavior` | `mode` / `follow_up` / `settle_delay` / `self_review` / `affinity_scale` | 运行模式 / 话题续接开关 / 发送前等待（秒）/ 文本与情感自检开关 / 好感度缩放系数（默认2） |
 | `emotion` | `enabled` / `image_dir` | 表情图开关（默认关）/ 表情图目录（见下） |
 | `search` | `enabled` | 智能搜索开关（默认关） |
 
@@ -258,7 +258,7 @@ plana help                 # 查看所有指令
 ```
 
 - 陌生→熟悉、熟悉→喜欢：**自动升级**
-- 喜欢→恋爱、恋爱→结婚：需你**主动申请**（好感度达标后，额外判断你的话是否明确表达意愿；恋爱会直接升到 80「热恋期」）
+- 喜欢→恋爱、恋爱→结婚：需你**主动申请**（好感度达标后，额外判断你的话是否明确表达意愿；恋爱会直接升到 80「热恋期」）；**好感度不足时表白/求婚，普拉娜会委婉地「还没准备好」回应，而不是含糊带过**
 - 除结婚外各阶段都可升降；**结婚后好感度锁定不降**
 - 每个阶段有独立的 prompt（语气、动作、彩蛋、吃醋梯度都不同）
 - 好感度**数值不进 prompt**（只有阶段与大致感觉）；`plana status` 可查看好感度、阶段、挂起话题
