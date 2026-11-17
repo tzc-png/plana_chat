@@ -483,7 +483,7 @@ class PlanaPipeline:
 
     async def _detect_reminder(self, user_id: str, user_text: str) -> str | None:
         """判断老师这句话是否触发「稍后重新提醒」（要加班/要贪睡等）。"""
-        if not any(k in user_text for k in ("加班", "睡", "困", "忙", "赶", "熬夜", "贪睡")):
+        if not any(k in user_text for k in ("加班", "睡", "困", "忙", "赶", "熬夜", "贪睡", "赖床", "补觉", "再睡", "眯")):
             return None
         prompt = (
             "判断老师这句话，是否属于「普拉娜刚提醒休息/起床，但老师要加班/要贪睡」的情况，"
