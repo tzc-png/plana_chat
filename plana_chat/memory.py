@@ -245,12 +245,12 @@ class MemoryStore:
         }
 
     def update_affinity(self, user_id: str, delta: int) -> int:
-        """好感度增减（下限 0），返回最新好感度。"""
+        """好感度增减（下限 0，由 SQL MAX 保证），返回最新好感度。"""
         with self._lock, closing(self._connect()) as conn:
             conn.execute(
                 "INSERT INTO relationship(user_id, affinity) VALUES(?,?) "
                 "ON CONFLICT(user_id) DO UPDATE SET affinity=MAX(0, affinity+excluded.affinity)",
-                (user_id, max(0, delta)),
+                (user_id, delta),
             )
             conn.commit()
         return self.get_relationship(user_id)["affinity"]

@@ -350,7 +350,7 @@ class PlanaPipeline:
         """根据情感标签更新好感度与阶段（自动升降级）。"""
         rel = self.memory.get_relationship(user_id)
         stage = rel["stage"]
-        delta = EMOTION_SCORES.get(emotion, 0) + 1  # 基础 +1
+        delta = EMOTION_SCORES.get(emotion, 0)  # 情绪分直接作为净变化（可升可降）
         if stage == "结婚" and delta < 0:
             delta = 0  # 结婚后好感度不下降
         new_affinity = self.memory.update_affinity(user_id, delta)
