@@ -158,10 +158,12 @@ EOF
       echo "语音引擎：未加载（首次发语音时自动启动）"
     fi
     "$VENV_PY" - "$PLANA_ROOT" "$DATA_DIR" <<'PYEOF'
-import json, re, sys
+import json, re, sys, sqlite3
 from pathlib import Path
 root = Path(sys.argv[1]); data_dir = Path(sys.argv[2])
 cfg = (root / "config.yaml").read_text(encoding="utf-8")
+
+# 模式
 m = re.search(r'\nmode:\s*(\w+)', cfg)
 default_mode = m.group(1) if m else "default"
 mode = default_mode
@@ -172,11 +174,43 @@ if sf.exists():
     except Exception:
         pass
 desc = {"default": "动态追问", "active": "总是追问", "quiet": "免打扰"}.get(mode, "?")
-m2 = re.search(r'persona_file:\s*"([^"]+)"', cfg)
-persona = m2.group(1) if m2 else "?"
-label = "折中版" if "compromise" in persona else "原版"
 print(f"模式：{mode}（{desc}）")
-print(f"人格：{label}")
+
+# 关系（好感度 + 阶段）+ 挂起话题
+m_db = re.search(r'db_path:\s*"([^"]+)"', cfg)
+db_path = root / (m_db.group(1) if m_db else "data/history.db")
+m_ids = re.search(r'chat_ids:\s*\[([^\]]+)\]', cfg)
+user_id = None
+if m_ids:
+    ids = [x.strip() for x in m_ids.group(1).split(',') if x.strip()]
+    if ids:
+        user_id = ids[0]
+
+def disp(c):
+    return c.replace("普拉娜jealous", "黑化").replace("普拉娜sulky", "吃醋")
+
+try:
+    conn = sqlite3.connect(str(db_path)); conn.row_factory = sqlite3.Row
+    if user_id:
+        rel = conn.execute("SELECT affinity, stage FROM relationship WHERE user_id=?", (user_id,)).fetchone()
+        topics = conn.execute(
+            "SELECT content FROM topics WHERE user_id=? AND status='open' ORDER BY importance DESC, id DESC LIMIT 5",
+            (user_id,),
+        ).fetchall()
+    else:
+        rel = conn.execute("SELECT affinity, stage FROM relationship ORDER BY user_id LIMIT 1").fetchone()
+        topics = conn.execute("SELECT content FROM topics WHERE status='open' ORDER BY importance DESC, id DESC LIMIT 5").fetchall()
+    conn.close()
+    if rel:
+        print(f"关系：{rel['stage']}（好感度 {rel['affinity']}）")
+    else:
+        print("关系：陌生（好感度 0）")
+    if topics:
+        print("挂起话题：" + "、".join(disp(t['content']) for t in topics))
+    else:
+        print("挂起话题：（无）")
+except Exception as e:
+    print(f"关系：—（{e}）")
 PYEOF
     ;;
 
