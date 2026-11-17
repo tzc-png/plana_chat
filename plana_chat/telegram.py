@@ -299,26 +299,35 @@ class TelegramBot:
                 logger.exception("发送语音失败")
         await self._maybe_send_emotion(chat_id, emotion)
 
-        # 追问：active 总是追问，default 动态决策，quiet 不追问
+        # 话题续接：判断话题是否结束，续接/挂起/收尾（quiet 不触发）
         if self.cfg.behavior.get("follow_up", True) and self.mode != "quiet":
             try:
                 await asyncio.sleep(self.cfg.behavior.get("follow_up_delay", 4))
-                # 追问前检查是否有新消息，有则跳过（对话已推进，避免追问过时）
                 if await self._peek_recent_user_messages(user_id):
-                    logger.info("跳过追问：等待期间有新消息")
+                    logger.info("跳过续接：等待期间有新消息")
                 else:
-                    follow = await self.pipeline.follow_up(
-                        user_id, text, display_text, dynamic=(self.mode == "default")
-                    )
-                    if follow:
-                        try:
-                            follow, _ = await self.pipeline.self_review(user_id, text, follow, "neutral")
-                        except Exception:
-                            logger.warning("追问自检失败，保留原文", exc_info=True)
-                        await self.send_text(chat_id, follow)
-                        await self.pipeline.store_assistant(user_id, follow)
+                    await self._topic_follow_up(chat_id, user_id, text, display_text)
             except Exception:
-                logger.exception("追问失败")
+                logger.exception("话题续接失败")
+
+    async def _topic_follow_up(self, chat_id: int, user_id: str, text: str, display_text: str) -> None:
+        """话题续接：判断话题状态，续接/挂起/收尾。"""
+        if self.mode == "active":
+            decision = {"state": "continuing", "topic": text}
+        else:
+            decision = await self.pipeline._topic_decision(user_id, text, display_text)
+
+        if decision["state"] == "continuing":
+            cont = await self.pipeline._topic_continuation(user_id, decision["topic"] or text)
+            if cont:
+                try:
+                    cont, _ = await self.pipeline.self_review(user_id, text, cont, "neutral")
+                except Exception:
+                    pass
+                await self.send_text(chat_id, cont)
+                await self.pipeline.store_assistant(user_id, cont)
+        elif decision["state"] == "switched" and decision["topic"]:
+            self.pipeline.memory.add_topic(user_id, "user_topic", decision["topic"], importance=1)
 
     async def run(self) -> None:
         logger.info("Telegram 机器人已启动（token 前缀 %s…）", self.token[:8])

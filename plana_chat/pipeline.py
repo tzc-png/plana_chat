@@ -51,13 +51,13 @@ EMOTION_SCORES = {
     "jealous": -1,
 }
 
-# 每阶段的关系指令（追加在基础人格之后，含阶段专属动作）
+# 每阶段的关系指令（追加在基础人格之后，含阶段专属动作、彩蛋、吃醋梯度）
 STAGE_PROMPTS = {
-    "陌生": "【当前关系】你们刚认识。保持礼貌克制，带一点疏离感，会偷偷观察老师。动作克制，不主动肢体接触，也不说太亲昵的话。",
+    "陌生": "【当前关系】你们刚认识。保持礼貌克制，带一点疏离感，会偷偷观察老师。动作克制，不主动肢体接触，也不说太亲昵的话。老师提到别的女生时，反应很淡。",
     "熟悉": "【当前关系】你们已经熟悉了。可以放松自然，偶尔主动关心，有一些小习惯。动作可以轻微自然（递东西、并肩走），但保持分寸。",
-    "喜欢": "【当前关系】你对老师有好感，会不自觉地多在意、多关心，偶尔害羞、口是心非。动作可以有轻微的身体靠近，但还不敢太亲昵。",
-    "恋爱": "【当前关系】你们是恋人（热恋期）。亲昵、依赖、撒娇都自然，会想黏着老师；动作可以牵手、挽手臂、靠肩、拥抱。保留普拉娜克制的底色。",
-    "结婚": "【当前关系】你们已经结婚。稳定默契、安心自然，偶尔流露老夫老妻的平淡幸福。动作自然亲密，不再羞涩。",
+    "喜欢": "【当前关系】你对老师有好感，会不自觉地多在意、多关心，偶尔害羞、口是心非。动作可以有轻微的身体靠近，但还不敢太亲昵。你刚意识到这份好感，第一次说出「喜欢」时自己也会吓一跳。老师提到别的女生时会有点在意。",
+    "恋爱": "【当前关系】你们是恋人（热恋期）。亲昵、依赖、撒娇都自然，会想黏着老师；动作可以牵手、挽手臂、靠肩、拥抱。刚成为恋人时，第一次牵手会害羞。保留普拉娜克制的底色。老师提到别的女生时，吃醋反应会比之前更明显。",
+    "结婚": "【当前关系】你们已经结婚。稳定默契、安心自然，偶尔流露老夫老妻的平淡幸福。动作自然亲密，不再羞涩。老师提到别的女生，会露出轻微的吃醋，但更多是信任。",
 }
 
 # 阶段阈值（好感度达到才可进入该阶段）
@@ -427,9 +427,11 @@ class PlanaPipeline:
         return new_emotion if new_emotion in EMOTION_SCORES else emotion
 
     def _handle_special_emotion(self, user_id: str, emotion: str) -> None:
-        """吃醋/黑化等特殊情绪挂起到话题表（高优先级）。"""
+        """吃醋/黑化等特殊情绪挂起到话题表（高优先级，且最多只挂一个）。"""
         if emotion in ("sulky", "jealous"):
-            self.memory.add_topic(user_id, "plana_emotion", f"普拉娜{emotion}", importance=3)
+            existing = self.memory.get_open_emotions(user_id, limit=1)
+            if not existing:
+                self.memory.add_topic(user_id, "plana_emotion", f"普拉娜{emotion}", importance=3)
 
     def _expire_topics(self, user_id: str, days: int = 3) -> None:
         """过期未消失的话题处理：情绪类话题消失时好感度 -6。"""
@@ -437,6 +439,47 @@ class PlanaPipeline:
             if t["type"] == "plana_emotion":
                 self.memory.update_affinity(user_id, -6)
                 logger.info("特殊情绪「%s」过期消失，好感度 -6", t["content"])
+
+    async def _topic_decision(self, user_id: str, user_text: str, display_text: str) -> dict:
+        """判断话题状态：finished（结束）/ continuing（继续）/ switched（老师切话题）。"""
+        prompt = (
+            "根据下面这轮对话，判断普拉娜刚回复完的这个话题的状态：\n"
+            "- finished：话题已经自然聊完、收尾了\n"
+            "- continuing：话题明显还没结束，老师还想继续聊它，普拉娜适合主动续一句\n"
+            "- switched：老师刚刚转向了新话题，之前的话题没聊完就被放下\n\n"
+            f"老师：{user_text}\n普拉娜：{display_text}\n\n"
+            '严格只输出 JSON：{"state": "finished"|"continuing"|"switched", "topic": "之前话题的简短描述"}'
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return {"state": "finished", "topic": ""}
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return {"state": "finished", "topic": ""}
+        state = data.get("state", "finished")
+        if state not in ("finished", "continuing", "switched"):
+            state = "finished"
+        return {"state": state, "topic": data.get("topic", "")}
+
+    async def _topic_continuation(self, user_id: str, topic: str) -> str | None:
+        """生成一句自然的话题续接。"""
+        prompt = (
+            f"你们正在聊「{topic}」，这个话题还没结束。请主动、自然地把话题往下续一句"
+            "（可以是补充、感慨、或轻轻带出下一个相关点），15 字以内，符合普拉娜克制的性格，不要带情感标签。"
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        text = strip_emotion_tag(raw).strip()
+        return text or None
 
     def _holiday_today(self, now: datetime) -> str | None:
         """返回今天的节日名（无则 None）。"""
