@@ -220,7 +220,12 @@ class TelegramBot:
         # 1. 生成回复（暂不存储）
         display_text, emotion = await self.pipeline.generate(user_id, text)
 
-        # 2. 发送前检查是否有新消息（用户连续发消息时合并重答）
+        # 2. 发送前短暂等待，让用户可能正在输入的消息到达
+        settle = self.cfg.behavior.get("settle_delay", 1.5)
+        if settle:
+            await asyncio.sleep(settle)
+
+        # 3. 发送前检查是否有新消息（用户连续发消息时合并重答）
         new_texts = await self._drain_recent_user_messages(user_id)
         if new_texts:
             combined = text + "\n" + "\n".join(new_texts)
@@ -228,11 +233,11 @@ class TelegramBot:
             display_text, emotion = await self.pipeline.generate(user_id, combined)
             text = combined
 
-        # 3. 生成语音 + 存储
+        # 4. 生成语音 + 存储
         voice_wav = await self.pipeline.make_voice(display_text)
         await self.pipeline.store(user_id, text, display_text, emotion)
 
-        # 4. 发送
+        # 5. 发送
         mode = self.cfg.reply.mode
         if mode in ("text_voice", "text"):
             await self.send_text(chat_id, display_text)

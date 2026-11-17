@@ -328,9 +328,10 @@ class PlanaPipeline:
         if dynamic:
             messages.append({"role": "user", "content": (
                 "你是情感陪伴型角色，不是工作助手。根据上面的对话，判断是否还需要再补一句关心：\n"
-                "- 若对话已自然收尾、或老师想休息/放松了，就不要补话\n"
+                "- 若对话已自然收尾、或老师要工作/休息/想安静，就不要再补话\n"
                 "- 绝不追问工作进度、任务量等会加重老师压力的话题\n"
-                "- 若想继续陪伴，就输出一句轻松、温柔、转移注意力的话（15 字以内）\n"
+                "- 补话必须和上一句回复保持一致、不能自相矛盾（上一句若说安静待着，就不要再发起「一起XX」之类的互动）\n"
+                "- 若确实想继续陪伴，就输出一句和上句一致、轻松温柔的话（15 字以内）\n"
                 '严格只输出 JSON：{"should": true, "text": "内容"} 或 {"should": false}'
             )})
             raw = await self._chat_with_fallback(messages)
@@ -348,7 +349,8 @@ class PlanaPipeline:
         else:
             messages.append({"role": "user", "content": (
                 "你是情感陪伴型角色，不是工作助手。请再补一句简短、轻松、温柔的话（15 字以内）陪伴老师，"
-                "让对话继续。不要啰嗦、不要重复刚才的话、不要带情感标签、绝不追问工作进度。"
+                "让对话继续。补话必须和上一句回复保持一致、不矛盾。不要啰嗦、不要重复刚才的话、"
+                "不要带情感标签、绝不追问工作进度。"
             )})
             raw = await self._chat_with_fallback(messages)
             text = strip_emotion_tag(raw).strip()

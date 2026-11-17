@@ -63,6 +63,7 @@ behavior:
   mode: default                    # default | active | quiet（默认 default）
   follow_up: true                  # 追问总开关
   follow_up_delay: 4               # 追问延迟（秒）
+  settle_delay: 1.5                # 发送前等待（秒），让用户正在输入的消息有时间到达再合并
 
 greeting:
   enabled: true
