@@ -279,7 +279,11 @@ class TelegramBot:
 
         # 4.7 关系升级申请检测（喜欢→恋爱 / 恋爱→结婚）
         try:
-            await self.pipeline._handle_application(user_id, text)
+            upgraded = await self.pipeline._handle_application(user_id, text)
+            if upgraded:
+                result = await self.pipeline.regenerate_after_upgrade(user_id, text, upgraded)
+                if result:
+                    display_text, emotion = result
         except Exception:
             logger.warning("关系申请判断失败", exc_info=True)
 

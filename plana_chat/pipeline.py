@@ -63,6 +63,12 @@ STAGE_PROMPTS = {
 # 阶段阈值（好感度达到才可进入该阶段）
 STAGE_THRESHOLDS = {"陌生": 0, "熟悉": 11, "喜欢": 31, "恋爱": 61, "结婚": 101}
 
+# 关系升级时的「特殊时刻」语气（用于申请命中后重新生成回复）
+SPECIAL_MOMENTS = {
+    "恋爱": "【特殊时刻】就在刚才，老师向你表白了。请明确、真诚地接受这份心意——答应和老师在一起。回复要明确带出「接受」的语义（如「我愿意」「嗯，我们在一起吧」），不要含糊、不要顾左右而言他。同时表达出惊喜、害羞又幸福的心情。",
+    "结婚": "【特殊时刻】就在刚才，老师向你求婚/你们决定结婚。请明确、郑重地接受——愿意和老师结婚。回复要明确带出「接受」的语义（如「我愿意」「好，我们结婚吧」），不要含糊。同时表达出感动、郑重、眼眶微热的心情。",
+}
+
 
 @dataclass
 class ProcessResult:
@@ -88,13 +94,15 @@ class PlanaPipeline:
         self.persona_template = persona_file.read_text(encoding="utf-8")
 
     # ── prompt 构建 ──────────────────────────────────────────────────────────
-    def _system_prompt(self, user_id: str) -> str:
+    def _system_prompt(self, user_id: str, special_hint: str | None = None) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         base = self.persona_template.replace("{current_time}", now)
         rel = self.memory.get_relationship(user_id)
         stage_instruction = STAGE_PROMPTS.get(rel["stage"], "")
         if stage_instruction:
-            return base + "\n\n" + stage_instruction
+            base = base + "\n\n" + stage_instruction
+        if special_hint:
+            base = base + "\n\n" + special_hint
         return base
 
     @staticmethod
@@ -123,7 +131,7 @@ class PlanaPipeline:
         return ""
 
     # ── 主流程 ──────────────────────────────────────────────────────────────
-    async def generate(self, user_id: str, user_text: str) -> tuple[str, str]:
+    async def generate(self, user_id: str, user_text: str, special_hint: str | None = None) -> tuple[str, str]:
         """生成回复（不存储）：返回 (display_text, emotion)。"""
         await self._maybe_consolidate(user_id)
         history = self.memory.recent(user_id, self.cfg.memory.rounds)
@@ -144,7 +152,7 @@ class PlanaPipeline:
             except Exception:
                 logger.warning("联网搜索失败，降级为普通回复", exc_info=True)
 
-        messages = [{"role": "system", "content": self._system_prompt(user_id)}]
+        messages = [{"role": "system", "content": self._system_prompt(user_id, special_hint)}]
 
         # 注入长期记忆：摘要 + 事实 + 未完成项
         summary = self.memory.get_summary(user_id)
@@ -383,8 +391,8 @@ class PlanaPipeline:
             return False
         return bool(data.get("apply"))
 
-    async def _handle_application(self, user_id: str, user_text: str) -> bool:
-        """处理关系升级申请（喜欢→恋爱 / 恋爱→结婚）。"""
+    async def _handle_application(self, user_id: str, user_text: str) -> str | None:
+        """处理关系升级申请（喜欢→恋爱 / 恋爱→结婚），返回升级后的阶段，未升级返回 None。"""
         rel = self.memory.get_relationship(user_id)
         stage, affinity = rel["stage"], rel["affinity"]
         if stage == "喜欢" and affinity >= STAGE_THRESHOLDS["恋爱"]:
@@ -392,9 +400,9 @@ class PlanaPipeline:
         elif stage == "恋爱" and affinity >= STAGE_THRESHOLDS["结婚"]:
             target, desc = "结婚", "结婚"
         else:
-            return False
+            return None
         if not await self._check_application(user_id, user_text, desc):
-            return False
+            return None
         today = datetime.now().strftime("%Y-%m-%d")
         if target == "恋爱":
             self.memory.set_stage(user_id, "恋爱")
@@ -405,7 +413,24 @@ class PlanaPipeline:
             self.memory.set_stage(user_id, "结婚")
             self.memory.set_milestone(user_id, "marriage_date", today)
             logger.info("💍 关系升级：恋爱 → 结婚")
-        return True
+        return target
+
+    async def regenerate_after_upgrade(self, user_id: str, user_text: str, upgraded_to: str) -> tuple[str, str] | None:
+        """申请升级后，用「特殊时刻」语气重新生成回复（含自检）。"""
+        special = SPECIAL_MOMENTS.get(upgraded_to)
+        if not special:
+            return None
+        display_text, emotion = await self.generate(user_id, user_text, special_hint=special)
+        try:
+            display_text, emotion = await self.self_review(user_id, user_text, display_text, emotion)
+        except Exception:
+            pass
+        try:
+            rel = self.memory.get_relationship(user_id)
+            emotion = await self._emotion_review(user_id, rel["stage"], display_text, emotion)
+        except Exception:
+            pass
+        return display_text, emotion
 
     async def _emotion_review(self, user_id: str, stage: str, display_text: str, emotion: str) -> str:
         """独立的情感自检：情感标签是否符合当前关系阶段，不合适则修正。"""
