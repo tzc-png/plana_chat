@@ -63,10 +63,11 @@ STAGE_PROMPTS = {
 # 阶段阈值（好感度达到才可进入该阶段）
 STAGE_THRESHOLDS = {"陌生": 0, "熟悉": 11, "喜欢": 31, "恋爱": 61, "结婚": 101}
 
-# 关系升级时的「特殊时刻」语气（用于申请命中后重新生成回复）
+# 关系升级/申请时的「特殊时刻」语气（用于申请命中后重新生成回复）
 SPECIAL_MOMENTS = {
     "恋爱": "【特殊时刻】就在刚才，老师向你表白了。请明确、真诚地接受这份心意——答应和老师在一起。回复要明确带出「接受」的语义（如「我愿意」「嗯，我们在一起吧」），不要含糊、不要顾左右而言他。同时表达出惊喜、害羞又幸福的心情。",
     "结婚": "【特殊时刻】就在刚才，老师向你求婚/你们决定结婚。请明确、郑重地接受——愿意和老师结婚。回复要明确带出「接受」的语义（如「我愿意」「好，我们结婚吧」），不要含糊。同时表达出感动、郑重、眼眶微热的心情。",
+    "reject": "【特殊时刻】老师刚才向你表白/求婚了，但你还没准备好、好感度还不够。请给一个委婉、温柔的拒绝/犹豫回应（如「老师突然说这个……我还没准备好」），既不要冷漠拒绝，也不要含糊到让老师误会。",
 }
 
 
@@ -358,7 +359,7 @@ class PlanaPipeline:
         """根据情感标签更新好感度与阶段（自动升降级）。"""
         rel = self.memory.get_relationship(user_id)
         stage = rel["stage"]
-        delta = EMOTION_SCORES.get(emotion, 0)  # 情绪分直接作为净变化（可升可降）
+        delta = EMOTION_SCORES.get(emotion, 0) * self.cfg.behavior.get("affinity_scale", 2)  # 情绪分 × 缩放系数
         if stage == "结婚" and delta < 0:
             delta = 0  # 结婚后好感度不下降
         new_affinity = self.memory.update_affinity(user_id, delta)
@@ -392,17 +393,22 @@ class PlanaPipeline:
         return bool(data.get("apply"))
 
     async def _handle_application(self, user_id: str, user_text: str) -> str | None:
-        """处理关系升级申请（喜欢→恋爱 / 恋爱→结婚），返回升级后的阶段，未升级返回 None。"""
+        """处理关系申请，返回 "恋爱"/"结婚"（升级）、"reject"（表白但好感度不足）、None（非表白）。"""
         rel = self.memory.get_relationship(user_id)
         stage, affinity = rel["stage"], rel["affinity"]
-        if stage == "喜欢" and affinity >= STAGE_THRESHOLDS["恋爱"]:
-            target, desc = "恋爱", "成为恋人"
-        elif stage == "恋爱" and affinity >= STAGE_THRESHOLDS["结婚"]:
-            target, desc = "结婚", "结婚"
-        else:
+        if stage not in ("喜欢", "恋爱"):
             return None
+        if stage == "喜欢":
+            desc, threshold, target = "成为恋人", STAGE_THRESHOLDS["恋爱"], "恋爱"
+        else:  # 恋爱
+            desc, threshold, target = "结婚", STAGE_THRESHOLDS["结婚"], "结婚"
+        # 先判断是否在表白/求婚（无论好感度是否达标）
         if not await self._check_application(user_id, user_text, desc):
             return None
+        # 是申请但好感度不足 → 委婉拒绝
+        if affinity < threshold:
+            return "reject"
+        # 达标 → 升级
         today = datetime.now().strftime("%Y-%m-%d")
         if target == "恋爱":
             self.memory.set_stage(user_id, "恋爱")
@@ -654,44 +660,6 @@ class PlanaPipeline:
         if self.cfg.reply.mode in ("text_voice", "voice"):
             voice_wav = await self._voice(display_text)
         return ProcessResult(display_text=display_text, emotion=emotion, voice_wav=voice_wav)
-
-    async def follow_up(self, user_id: str, last_user: str, last_assistant: str, dynamic: bool = False) -> str | None:
-        """生成一句简短自然的追问；dynamic=True 时由 LLM 动态判断是否需要追问。"""
-        messages = [
-            {"role": "system", "content": self._system_prompt(user_id)},
-            {"role": "user", "content": last_user},
-            {"role": "assistant", "content": last_assistant},
-        ]
-        if dynamic:
-            messages.append({"role": "user", "content": (
-                "你是情感陪伴型角色，不是工作助手。根据上面的对话，判断是否还需要再补一句关心：\n"
-                "- 若对话已自然收尾、或老师要工作/休息/想安静，就不要再补话\n"
-                "- 绝不追问工作进度、任务量等会加重老师压力的话题\n"
-                "- 补话必须和上一句回复保持一致、不能自相矛盾（上一句若说安静待着，就不要再发起「一起XX」之类的互动）\n"
-                "- 若确实想继续陪伴，就输出一句和上句一致、轻松温柔的话（15 字以内）\n"
-                '严格只输出 JSON：{"should": true, "text": "内容"} 或 {"should": false}'
-            )})
-            raw = await self._chat_with_fallback(messages)
-            m = re.search(r"\{.*\}", raw, re.S)
-            if not m:
-                return None
-            try:
-                data = json.loads(m.group(0))
-            except Exception:
-                return None
-            if not data.get("should"):
-                return None
-            text = str(data.get("text", "")).strip()
-            return text or None
-        else:
-            messages.append({"role": "user", "content": (
-                "你是情感陪伴型角色，不是工作助手。请再补一句简短、轻松、温柔的话（15 字以内）陪伴老师，"
-                "让对话继续。补话必须和上一句回复保持一致、不矛盾。不要啰嗦、不要重复刚才的话、"
-                "不要带情感标签、绝不追问工作进度。"
-            )})
-            raw = await self._chat_with_fallback(messages)
-            text = strip_emotion_tag(raw).strip()
-            return text or None
 
     async def store_assistant(self, user_id: str, text: str, emotion: str | None = None) -> None:
         """把追问等补充回复也存入记忆（带 embedding）。"""
