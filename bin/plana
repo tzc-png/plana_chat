@@ -138,22 +138,24 @@ EOF
     ;;
 
   status)
-    if systemctl is-enabled --quiet "$SERVICE" 2>/dev/null; then
-      echo "systemd：已启用"
-    else
-      echo "systemd：未启用"
-    fi
     if systemd_active; then
-      echo "运行状态：运行中（systemd）"
+      echo "运行状态：运行中"
+      echo "运行方式：systemd 服务（$SERVICE）"
     elif is_running; then
-      echo "运行状态：运行中（后台进程 PID $(cat "$PID_FILE")）"
+      echo "运行状态：运行中"
+      echo "运行方式：后台进程（PID $(cat "$PID_FILE")）"
     else
       echo "运行状态：未运行"
+      if systemctl is-enabled --quiet "$SERVICE" 2>/dev/null; then
+        echo "运行方式：systemd 服务（已启用，当前未运行）"
+      else
+        echo "运行方式：未配置"
+      fi
     fi
     if pgrep -f "plana_tts_server.py" > /dev/null 2>&1; then
-      echo "语音引擎：运行中"
+      echo "语音引擎：已加载"
     else
-      echo "语音引擎：未运行"
+      echo "语音引擎：未加载（首次发语音时自动启动）"
     fi
     "$VENV_PY" - "$PLANA_ROOT" "$DATA_DIR" <<'PYEOF'
 import json, re, sys
@@ -174,7 +176,7 @@ m2 = re.search(r'persona_file:\s*"([^"]+)"', cfg)
 persona = m2.group(1) if m2 else "?"
 label = "折中版" if "compromise" in persona else "原版"
 print(f"模式：{mode}（{desc}）")
-print(f"人格：{label}（{persona}）")
+print(f"人格：{label}")
 PYEOF
     ;;
 
