@@ -71,6 +71,7 @@ greeting:
   enabled: true
   times: ["08:00", "11:00", "21:00"]   # 北京时间：早上/中午/晚上
   chat_ids: [9045953592]           # 主动问候的 Telegram chat_id（可加多个）
+  reminder_minutes: 20             # 重新提醒间隔（分钟），如加班/贪睡后的再次提醒
 
 emotion:
   enabled: false                   # 是否发送情感表情图（默认关闭）

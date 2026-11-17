@@ -481,6 +481,58 @@ class PlanaPipeline:
         text = strip_emotion_tag(raw).strip()
         return text or None
 
+    async def _detect_reminder(self, user_id: str, user_text: str) -> str | None:
+        """判断老师这句话是否触发「稍后重新提醒」（要加班/要贪睡等）。"""
+        if not any(k in user_text for k in ("加班", "睡", "困", "忙", "赶", "熬夜", "贪睡")):
+            return None
+        prompt = (
+            "判断老师这句话，是否属于「普拉娜刚提醒休息/起床，但老师要加班/要贪睡」的情况，"
+            "从而需要普拉娜在稍后重新提醒一次。\n"
+            "若是，给出提醒内容简述（如「提醒休息」「提醒起床」）；若不是，返回 no。\n\n"
+            f"老师的话：{user_text}\n\n"
+            '严格只输出 JSON：{"need": true, "remind": "提醒内容"} 或 {"need": false}'
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return None
+        if data.get("need"):
+            return str(data.get("remind", "")).strip() or None
+        return None
+
+    async def _reminder_text(self, user_id: str, remind: str) -> str | None:
+        """到期提醒时，判断是否还需要提醒 + 生成文案。"""
+        prompt = (
+            f"普拉娜之前挂起了一个提醒任务：「{remind}」，现在到了提醒时间。\n"
+            "请判断现在是否还需要提醒（若老师可能已经在休息/已起床，就不需要），"
+            "并生成一句自然、温柔的提醒（15 字以内，带情感标签 [emotion:xxx]）。\n\n"
+            '严格只输出 JSON：{"need": true, "text": "提醒内容"} 或 {"need": false}'
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return None
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return None
+        if not data.get("need"):
+            return None
+        text = str(data.get("text", "")).strip()
+        return text or None
+
     def _holiday_today(self, now: datetime) -> str | None:
         """返回今天的节日名（无则 None）。"""
         f = Path(self.cfg.character.get("holidays_file", "plana_chat/character/holidays.txt"))

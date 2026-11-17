@@ -329,6 +329,35 @@ class MemoryStore:
             conn.commit()
         return [{"id": r["id"], "type": r["type"], "content": r["content"]} for r in rows]
 
+    # ── 重新提醒 ────────────────────────────────────────────────────────
+    def get_due_reminders(self, user_id: str, minutes: int = 20) -> list[dict]:
+        """返回已到期的提醒任务（type='reminder' 且创建超过 N 分钟）。"""
+        since = (datetime.now() - timedelta(minutes=minutes)).strftime(_TIME_FMT)
+        with self._lock, closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT id, content FROM topics WHERE user_id=? AND type='reminder' "
+                "AND status='open' AND created_at<?",
+                (user_id, since),
+            ).fetchall()
+        return [{"id": r["id"], "content": r["content"]} for r in rows]
+
+    def cancel_reminders(self, user_id: str) -> None:
+        """取消该用户所有未到期的提醒（老师已发消息）。"""
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                "UPDATE topics SET status='closed' WHERE user_id=? AND type='reminder' AND status='open'",
+                (user_id,),
+            )
+            conn.commit()
+
+    def has_pending_reminder(self, user_id: str) -> bool:
+        with self._lock, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM topics WHERE user_id=? AND type='reminder' AND status='open'",
+                (user_id,),
+            ).fetchone()
+        return row["c"] > 0
+
     # ── 向量语义检索 ───────────────────────────────────────────────────────
     def search_similar(
         self,

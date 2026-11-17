@@ -234,6 +234,9 @@ class TelegramBot:
         if self._handle_command(chat_id, text):
             return
 
+        # 老师发消息 → 取消之前挂起的提醒任务
+        self.pipeline.memory.cancel_reminders(user_id)
+
         await self.send_chat_action(chat_id, "typing")
 
         # 1. 生成回复（暂不存储）
@@ -283,6 +286,15 @@ class TelegramBot:
         # 4.8 话题过期处理（特殊情绪 3 天未消失则消失并 -6）
         self.pipeline._expire_topics(user_id)
 
+        # 4.9 检测是否需要稍后重新提醒（要加班/要贪睡等）
+        try:
+            remind = await self.pipeline._detect_reminder(user_id, text)
+            if remind:
+                self.pipeline.memory.add_topic(user_id, "reminder", remind, importance=9)
+                logger.info("挂起提醒任务：%s", remind)
+        except Exception:
+            logger.warning("提醒检测失败", exc_info=True)
+
         # 5. 生成语音 + 存储
         voice_wav = await self.pipeline.make_voice(display_text)
         await self.pipeline.store(user_id, text, display_text, emotion)
@@ -312,6 +324,9 @@ class TelegramBot:
 
     async def _topic_follow_up(self, chat_id: int, user_id: str, text: str, display_text: str) -> None:
         """话题续接：判断话题状态，续接/挂起/收尾。"""
+        # 有挂起的提醒时，不主动续话题（等待提醒期间保持安静）
+        if self.pipeline.memory.has_pending_reminder(user_id):
+            return
         if self.mode == "active":
             decision = {"state": "continuing", "topic": text}
         else:
@@ -329,9 +344,34 @@ class TelegramBot:
         elif decision["state"] == "switched" and decision["topic"]:
             self.pipeline.memory.add_topic(user_id, "user_topic", decision["topic"], importance=1)
 
+    async def _reminder_loop(self) -> None:
+        """每 60 秒检查一次是否有到期的提醒任务。"""
+        while True:
+            try:
+                await self._check_due_reminders()
+            except Exception:
+                logger.exception("提醒检查出错")
+            await asyncio.sleep(60)
+
+    async def _check_due_reminders(self) -> None:
+        minutes = self.cfg.greeting.get("reminder_minutes", 20)
+        for chat_id in self.cfg.greeting.chat_ids:
+            user_id = str(chat_id)
+            for r in self.pipeline.memory.get_due_reminders(user_id, minutes=minutes):
+                try:
+                    text = await self.pipeline._reminder_text(user_id, r["content"])
+                    if text:
+                        await self.send_text(chat_id, text)
+                        await self.pipeline.store_assistant(user_id, text)
+                except Exception:
+                    logger.exception("发送提醒失败")
+                finally:
+                    self.pipeline.memory.close_topic(r["id"])
+
     async def run(self) -> None:
         logger.info("Telegram 机器人已启动（token 前缀 %s…）", self.token[:8])
         asyncio.create_task(self._state_watcher())
+        asyncio.create_task(self._reminder_loop())
         if self.cfg.greeting.enabled:
             asyncio.create_task(self._greet_loop())
             logger.info("主动问候已启用：%s", self.cfg.greeting.times)
