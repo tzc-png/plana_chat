@@ -164,6 +164,25 @@ class TelegramBot:
             texts.append(msg["text"].strip())
         return texts
 
+    async def _peek_recent_user_messages(self, user_id: str, within_seconds: int = 15) -> bool:
+        """检查（不消费）该用户最近 N 秒内是否有新消息。"""
+        now = time.time()
+        async with self._client() as client:
+            resp = await client.get(
+                f"{self.api}/getUpdates",
+                params={"offset": self.offset, "timeout": 0},
+            )
+            resp.raise_for_status()
+            updates = resp.json().get("result", [])
+        for upd in updates:
+            msg = upd.get("message")
+            if not msg or "text" not in msg:
+                continue
+            muser = str(msg.get("from", {}).get("id", msg.get("chat", {}).get("id")))
+            if muser == user_id and now - msg.get("date", 0) <= within_seconds:
+                return True
+        return False
+
     async def _state_watcher(self) -> None:
         """每 30 秒刷新模式状态，让 plana quiet/active/default（CLI）也能即时生效。"""
         while True:
@@ -262,12 +281,16 @@ class TelegramBot:
         if self.cfg.behavior.get("follow_up", True) and self.mode != "quiet":
             try:
                 await asyncio.sleep(self.cfg.behavior.get("follow_up_delay", 4))
-                follow = await self.pipeline.follow_up(
-                    user_id, text, display_text, dynamic=(self.mode == "default")
-                )
-                if follow:
-                    await self.send_text(chat_id, follow)
-                    await self.pipeline.store_assistant(user_id, follow)
+                # 追问前检查是否有新消息，有则跳过（对话已推进，避免追问过时）
+                if await self._peek_recent_user_messages(user_id):
+                    logger.info("跳过追问：等待期间有新消息")
+                else:
+                    follow = await self.pipeline.follow_up(
+                        user_id, text, display_text, dynamic=(self.mode == "default")
+                    )
+                    if follow:
+                        await self.send_text(chat_id, follow)
+                        await self.pipeline.store_assistant(user_id, follow)
             except Exception:
                 logger.exception("追问失败")
 
