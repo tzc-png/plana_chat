@@ -41,6 +41,7 @@ tts:
 
 character:
   persona_file: "plana_chat/character/plana_compromise.txt"   # 折中版人格；可换回 plana.txt
+  holidays_file: "plana_chat/character/holidays.txt"           # 节日配置（早上问候时提示）
 
 memory:
   rounds: 8                    # 每用户保留最近 N 轮
@@ -68,7 +69,7 @@ behavior:
 
 greeting:
   enabled: true
-  times: ["08:00", "22:00"]        # 北京时间，主动问候时刻
+  times: ["08:00", "11:00", "21:00"]   # 北京时间：早上/中午/晚上
   chat_ids: [9045953592]           # 主动问候的 Telegram chat_id（可加多个）
 
 emotion:

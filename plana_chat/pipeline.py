@@ -297,6 +297,28 @@ class PlanaPipeline:
         exclude = self.cfg.memory.rounds * 2
         return self.memory.search_similar(user_id, user_emb, limit=top_k, exclude_recent=exclude)
 
+    def _holiday_today(self, now: datetime) -> str | None:
+        """返回今天的节日名（无则 None）。"""
+        f = Path(self.cfg.character.get("holidays_file", "plana_chat/character/holidays.txt"))
+        if not f.is_absolute():
+            f = Path(__file__).resolve().parent.parent / f
+        try:
+            text = f.read_text(encoding="utf-8")
+        except Exception:
+            return None
+        key = now.strftime("%m-%d")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            for sep in ("：", ":"):
+                if sep in line:
+                    d, name = line.split(sep, 1)
+                    if d.strip() == key:
+                        return name.strip()
+                    break
+        return None
+
     async def greet(self, user_id: str) -> ProcessResult | None:
         """上下文感知的主动问候；最近有进行中对话时返回 None（跳过）。"""
         now = datetime.now()
@@ -308,7 +330,12 @@ class PlanaPipeline:
             return None
 
         hour = now.hour
-        period = "早上" if 5 <= hour < 12 else ("晚上" if hour >= 18 else "现在")
+        if 5 <= hour < 11:
+            period = "早上"
+        elif 11 <= hour < 14:
+            period = "中午"
+        else:
+            period = "晚上"
         recent = self.memory.recent(user_id, self.cfg.memory.rounds)
         background = self._format_msgs(recent[-6:]) if recent else "（暂无历史，这是第一次问候）"
 
@@ -324,6 +351,11 @@ class PlanaPipeline:
             f"【最近对话背景】\n{background}\n\n"
             "只输出问候内容。"
         )
+
+        # 节日提示（仅早上问候时）
+        holiday = self._holiday_today(now)
+        if holiday and period == "早上":
+            hint += f"\n\n另外，今天是「{holiday}」，请顺带一句应景的节日祝福或问候。"
 
         open_items = self.memory.recent_open_items(user_id, limit=3)
         if open_items:
