@@ -859,9 +859,27 @@ class PlanaPipeline:
             period = "中午"
         else:
             period = "晚上"
-        recent = self.memory.recent(user_id, self.cfg.memory.rounds)
-        user_msgs = [m["content"] for m in recent if m["role"] == "user"]
-        background = "\n".join(f"老师：{c}" for c in user_msgs[-3:]) if user_msgs else "（暂无历史，这是第一次问候）"
+        user_msgs = self.memory.recent_user_messages(user_id, limit=3)
+        if user_msgs:
+            lines = []
+            for m in user_msgs:
+                try:
+                    t = datetime.strptime(m["created_at"], "%Y-%m-%d %H:%M:%S")
+                    diff_min = int((now - t).total_seconds() / 60)
+                    if diff_min < 1:
+                        when = "刚刚"
+                    elif diff_min < 60:
+                        when = f"{diff_min} 分钟前"
+                    elif diff_min < 1440:
+                        when = f"{diff_min // 60} 小时前"
+                    else:
+                        when = f"{diff_min // 1440} 天前"
+                except Exception:
+                    when = "之前"
+                lines.append(f"老师（{when}）：{m['content']}")
+            background = "\n".join(lines)
+        else:
+            background = "（暂无历史，这是第一次问候）"
 
         hint = (
             f"现在是 {now.strftime('%H:%M')}（{period}）。请主动给老师发一句问候，"

@@ -138,6 +138,15 @@ class MemoryStore:
             out.append(d)
         return out
 
+    def recent_user_messages(self, user_id: str, limit: int = 3) -> list[dict]:
+        """返回最近 N 条老师原话（含时间），供主动问候判断情境。"""
+        with self._lock, closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT content, created_at FROM messages WHERE user_id=? AND role='user' ORDER BY id DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        return [{"content": r["content"], "created_at": r["created_at"]} for r in reversed(rows)]
+
     def last_user_time(self, user_id: str) -> datetime | None:
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
