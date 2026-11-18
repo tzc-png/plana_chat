@@ -421,6 +421,25 @@ class PlanaPipeline:
         self.memory.add_topic(user_id, "user_topic", content, importance=1)
         logger.info("挂起话题：%s", content)
 
+    async def _maybe_settle_idle_topic(self, user_id: str) -> None:
+        """静默超时的话题自动结算（老师发消息时检查）：超时则结算 + 挂起 + 清空。"""
+        cur = self.memory.get_current_topic(user_id)
+        if not cur["topic"]:
+            return
+        last = self.memory.last_message_time(user_id)
+        if last is None:
+            return
+        idle_minutes = self.cfg.memory.get("topic_idle_minutes", 60)
+        if (datetime.now() - last).total_seconds() < idle_minutes * 60:
+            return  # 未超时
+        if cur["kind"] == "emotion":
+            await self._settle_emotion(user_id, cur["topic"])
+        else:
+            self._hang_topic(user_id, cur["topic"], "静默超时，未聊完")
+        self._settle_topic_affinity(user_id)
+        self.memory.set_current_topic(user_id, "", "normal")
+        logger.info("话题静默超时已结算：%s", cur["topic"])
+
     async def _check_application(self, user_id: str, user_text: str, desc: str) -> bool:
         """判断老师这句话是否在明确认真地申请升级关系。"""
         prompt = (

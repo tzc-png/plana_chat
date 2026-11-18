@@ -228,6 +228,9 @@ class TelegramBot:
         if self._handle_command(chat_id, text):
             return
 
+        # 阶段0前：静默超时的话题自动结算（用上一轮的时间判断）
+        await self.pipeline._maybe_settle_idle_topic(user_id)
+
         # 阶段0：老师消息立即落库 + 取消提醒
         self.pipeline.memory.cancel_reminders(user_id)
         await self.pipeline.store_user(user_id, text)
