@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 import math
@@ -67,6 +68,27 @@ STAGE_PROMPTS = {
 
 # 阶段阈值（好感度达到才可进入该阶段；恋爱/结婚为申请阈值）
 STAGE_THRESHOLDS = {"陌生": 0, "熟悉": 11, "喜欢": 31, "恋爱": 60, "结婚": 100}
+
+# LLM 调用方函数名 → 中文标签（用于 DEBUG 日志标注是哪一步）
+_CALLER_LABELS = {
+    "generate": "主回复",
+    "self_review": "自检",
+    "_emotion_review": "情感自检",
+    "_check_application": "申请判断",
+    "_topic_decision": "续接判断",
+    "_topic_continuation": "续接生成",
+    "_judge_topic": "话题判断",
+    "_can_chat": "是否方便",
+    "_topic_suitability": "合适性判断",
+    "_resume_topic_text": "拾起话题",
+    "_resume_emotion_text": "拾起吃醋",
+    "_judge_soothing": "安抚判断",
+    "_detect_reminder": "提醒判断",
+    "_reminder_text": "提醒文案",
+    "greet": "问候",
+    "_summarize": "记忆摘要",
+    "_extract_facts": "事实抽取",
+}
 
 # 关系升级/申请时的「特殊时刻」语气（用于申请命中后重新生成回复）
 SPECIAL_MOMENTS = {
@@ -257,8 +279,17 @@ class PlanaPipeline:
             else:
                 raise
         last_user = messages[-1]["content"] if messages else ""
-        logger.debug("LLM 请求：%s", last_user[:80].replace("\n", " "))
-        logger.debug("LLM 返回：%s", raw[:80].replace("\n", " "))
+        # 从调用栈推断当前是哪一步（主回复/自检/申请判断等）
+        frame = inspect.currentframe()
+        caller = frame.f_back.f_code.co_name if frame and frame.f_back else ""
+        label = _CALLER_LABELS.get(caller, caller)
+        tag = f"[{label}]" if label else ""
+        req = last_user[:80].replace("\n", " ")
+        req += "…" if len(last_user) > 80 else ""
+        logger.debug("LLM 请求%s：%s", tag, req)
+        ret = raw[:80].replace("\n", " ")
+        ret += "…" if len(raw) > 80 else ""
+        logger.debug("LLM 返回%s：%s", tag, ret)
         return raw
 
     @staticmethod
