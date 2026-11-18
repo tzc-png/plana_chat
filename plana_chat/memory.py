@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timedelta
@@ -98,12 +99,14 @@ class MemoryStore:
                     user_id TEXT PRIMARY KEY,
                     topic TEXT NOT NULL,
                     kind TEXT NOT NULL DEFAULT 'normal',
+                    emotions TEXT NOT NULL DEFAULT '[]',
                     updated_at TEXT NOT NULL
                 )"""
             )
             # 旧库迁移：补列
             self._ensure_column(conn, "messages", "embedding", "BLOB")
             self._ensure_column(conn, "summaries", "consolidated_upto", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(conn, "current_topic", "emotions", "TEXT NOT NULL DEFAULT '[]'")
             conn.commit()
 
     # ── 消息 ────────────────────────────────────────────────────────────────
@@ -299,22 +302,55 @@ class MemoryStore:
 
     # ── 当前话题 ──────────────────────────────────────────────────────────
     def get_current_topic(self, user_id: str) -> dict:
-        """返回 {topic, kind}；无记录返回空话题。"""
+        """返回 {topic, kind, emotions}；无记录返回空话题。"""
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT topic, kind FROM current_topic WHERE user_id=?", (user_id,)
+                "SELECT topic, kind, emotions FROM current_topic WHERE user_id=?", (user_id,)
             ).fetchone()
         if row is None:
-            return {"topic": "", "kind": "normal"}
-        return {"topic": row["topic"], "kind": row["kind"]}
+            return {"topic": "", "kind": "normal", "emotions": []}
+        try:
+            emotions = json.loads(row["emotions"])
+        except Exception:
+            emotions = []
+        return {"topic": row["topic"], "kind": row["kind"], "emotions": emotions}
 
     def set_current_topic(self, user_id: str, topic: str, kind: str = "normal") -> None:
+        """设置当前话题，情感累积重置为空。"""
         now = datetime.now().strftime(_TIME_FMT)
         with self._lock, closing(self._connect()) as conn:
             conn.execute(
-                "INSERT INTO current_topic(user_id, topic, kind, updated_at) VALUES(?,?,?,?) "
-                "ON CONFLICT(user_id) DO UPDATE SET topic=excluded.topic, kind=excluded.kind, updated_at=excluded.updated_at",
-                (user_id, topic, kind, now),
+                "INSERT INTO current_topic(user_id, topic, kind, emotions, updated_at) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET topic=excluded.topic, kind=excluded.kind, "
+                "emotions=excluded.emotions, updated_at=excluded.updated_at",
+                (user_id, topic, kind, "[]", now),
+            )
+            conn.commit()
+
+    def accumulate_topic_emotion(self, user_id: str, emotion: str) -> None:
+        """当前话题累积一个情感标签（立即持久化）。"""
+        with self._lock, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT emotions FROM current_topic WHERE user_id=?", (user_id,)
+            ).fetchone()
+            if row is None:
+                return
+            try:
+                emotions = json.loads(row["emotions"])
+            except Exception:
+                emotions = []
+            emotions.append(emotion)
+            conn.execute(
+                "UPDATE current_topic SET emotions=? WHERE user_id=?",
+                (json.dumps(emotions, ensure_ascii=False), user_id),
+            )
+            conn.commit()
+
+    def clear_topic_emotions(self, user_id: str) -> None:
+        """清空当前话题的情感累积。"""
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                "UPDATE current_topic SET emotions='[]' WHERE user_id=?", (user_id,)
             )
             conn.commit()
 

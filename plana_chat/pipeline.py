@@ -99,9 +99,6 @@ class PlanaPipeline:
             persona_file = Path(__file__).resolve().parent.parent / persona_file
         self.persona_template = persona_file.read_text(encoding="utf-8")
 
-        # 当前话题累积的情感标签（内存态，随话题重置）
-        self._topic_emotions: dict[str, list[str]] = {}
-
     # ── prompt 构建 ──────────────────────────────────────────────────────────
     def _system_prompt(self, user_id: str, special_hint: str | None = None) -> str:
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -370,16 +367,16 @@ class PlanaPipeline:
 
     # ── 话题级好感度 ────────────────────────────────────────────────────
     def _accumulate_emotion(self, user_id: str, emotion: str) -> None:
-        """当前话题累积一个情感标签（确认发送后调用）。"""
-        self._topic_emotions.setdefault(user_id, []).append(emotion)
-        logger.debug("累积情感：%s（当前话题共 %d 个）", emotion, len(self._topic_emotions[user_id]))
+        """当前话题累积一个情感标签（确认发送后调用，立即持久化）。"""
+        self.memory.accumulate_topic_emotion(user_id, emotion)
+        logger.debug("累积情感：%s", emotion)
 
     def _clear_topic_emotions(self, user_id: str) -> None:
-        self._topic_emotions.pop(user_id, None)
+        self.memory.clear_topic_emotions(user_id)
 
     def _settle_topic_affinity(self, user_id: str) -> dict:
         """结算当前话题的好感度（话题 finished 或切走时触发）。"""
-        emotions = self._topic_emotions.get(user_id, [])
+        emotions = self.memory.get_current_topic(user_id)["emotions"]
         if not emotions:
             return self.memory.get_relationship(user_id)
 

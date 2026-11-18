@@ -102,11 +102,11 @@ def test_relationship() -> None:
         memory=MemoryStore(tmp),
         cfg=cfg,
         _compute_stage=lambda affinity, stage: PlanaPipeline._compute_stage(None, affinity, stage),
-        _topic_emotions={},
     )
-    fake._clear_topic_emotions = lambda uid: fake._topic_emotions.pop(uid, None)
+    fake._clear_topic_emotions = lambda uid: fake.memory.clear_topic_emotions(uid)
 
     for _ in range(3):
+        fake.memory.set_current_topic("u1", "话题", "normal")  # 新话题，重置 emotions
         PlanaPipeline._accumulate_emotion(fake, "u1", "neutral")
         PlanaPipeline._settle_topic_affinity(fake, "u1")
     rel = fake.memory.get_relationship("u1")
