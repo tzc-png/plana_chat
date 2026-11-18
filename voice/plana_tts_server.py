@@ -259,6 +259,9 @@ def handle_client(conn):
                 break
             data += chunk
 
+        if not data.strip():
+            return  # 空请求（探活探测），直接关闭不报错
+
         req  = json.loads(data.decode().strip())
         text = req.get("text", "")
         out  = req.get("out",  "/tmp/plana_tts_out.wav")
