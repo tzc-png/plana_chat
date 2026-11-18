@@ -385,7 +385,6 @@ class PlanaPipeline:
     async def _check_application(self, user_id: str, user_text: str, desc: str) -> bool:
         """判断老师这句话是否在明确认真地申请升级关系。"""
         prompt = (
-            f"普拉娜当前与老师的关系阶段即将可以{desc}，好感度已满足条件。\n"
             f"请判断老师下面这句话，是否在明确、认真地表达「想和普拉娜{desc}」的意愿。\n"
             "注意：必须是明确认真的表达（如「我们在一起吧」「嫁给我」）；开玩笑、暧昧、无关的话都不算。\n\n"
             f"老师的话：{user_text}\n\n"
@@ -411,13 +410,14 @@ class PlanaPipeline:
         """处理关系申请，返回 "恋爱"/"结婚"（升级）、"reject"（表白但好感度不足）、None（非表白）。"""
         rel = self.memory.get_relationship(user_id)
         stage, affinity = rel["stage"], rel["affinity"]
-        if stage not in ("喜欢", "恋爱"):
-            return None
-        if stage == "喜欢":
-            desc, threshold, target = "成为恋人", STAGE_THRESHOLDS["恋爱"], "恋爱"
-        else:  # 恋爱
+        if stage == "结婚":
+            return None  # 关系已锁定不再变动，无需判断
+        # 常驻判断：恋爱阶段判断「求婚」，其余（陌生/熟悉/喜欢）判断「表白」
+        if stage == "恋爱":
             desc, threshold, target = "结婚", STAGE_THRESHOLDS["结婚"], "结婚"
-        # 先判断是否在表白/求婚（无论好感度是否达标）
+        else:
+            desc, threshold, target = "成为恋人", STAGE_THRESHOLDS["恋爱"], "恋爱"
+        # 判断是否在表白/求婚（无论好感度是否达标）
         if not await self._check_application(user_id, user_text, desc):
             return None
         # 是申请但好感度不足 → 委婉拒绝
