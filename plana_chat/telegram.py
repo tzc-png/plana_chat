@@ -337,7 +337,7 @@ class TelegramBot:
             decision = await self.pipeline._topic_decision(user_id, text, display_text)
 
         if decision["state"] == "continuing":
-            cont = await self.pipeline._topic_continuation(user_id, decision["topic"] or text)
+            cont = await self.pipeline._topic_continuation(user_id, decision["topic"] or text, text, display_text)
             if cont:
                 try:
                     cont, _ = await self.pipeline.self_review(user_id, text, cont, "neutral")

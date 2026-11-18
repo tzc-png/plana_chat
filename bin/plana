@@ -65,6 +65,8 @@ case "${1:-}" in
       exit 0
     fi
     mkdir -p "$DATA_DIR"
+    # 切到项目根再启动，避免相对路径（如 memory.db_path）因启动目录不同而漂移
+    cd "$PLANA_ROOT" || exit 1
     # setsid 彻底脱离终端，关终端/重启不依赖当前 shell
     setsid "$VENV_PY" "$RUNNER" >> "$LOG_FILE" 2>&1 < /dev/null &
     echo $! > "$PID_FILE"

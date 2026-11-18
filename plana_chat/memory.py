@@ -19,7 +19,11 @@ _TIME_FMT = "%Y-%m-%d %H:%M:%S"
 
 class MemoryStore:
     def __init__(self, db_path: str):
-        self.db_path = str(db_path)
+        p = Path(db_path)
+        if not p.is_absolute():
+            # 相对路径统一 resolve 到项目根，避免启动目录（cwd）不同导致记忆库漂移
+            p = Path(__file__).resolve().parent.parent / p
+        self.db_path = str(p)
         self._lock = Lock()
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()

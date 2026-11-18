@@ -51,6 +51,10 @@ EMOTION_SCORES = {
     "jealous": -1,
 }
 
+# 每轮对话的基础好感度（与情感分叠加，同样受 affinity_scale 调控）。
+# 陌生阶段强制升温、熟悉阶段缓升，避免关系阶段因情感标签长期 neutral 而停滞。
+STAGE_BASE_SCORES = {"陌生": 2, "熟悉": 1}
+
 # 每阶段的关系指令（追加在基础人格之后，含阶段专属动作、彩蛋、吃醋梯度）
 STAGE_PROMPTS = {
     "陌生": "【当前关系】你们刚认识。保持礼貌克制，带一点疏离感，会偷偷观察老师。动作克制，不主动肢体接触，也不说太亲昵的话。老师提到别的女生时，反应很淡。",
@@ -216,7 +220,8 @@ class PlanaPipeline:
             "请审查下面这条即将发送给老师的回复。只有当你发现它存在以下问题时才修改，否则原样输出：\n"
             "1. 与前面对话上下文矛盾、前后不一致\n"
             "2. 不合时宜（老师说要工作/休息/安静，回复却在打扰或发起互动）\n"
-            "3. 不符合普拉娜克制、安静、情感陪伴的性格\n\n"
+            "3. 不符合普拉娜克制、安静、情感陪伴的性格\n"
+            "4. 与普拉娜刚说过的上一句语义重复、冗余，或时态错乱（老师正在做/刚说要做的事，却用完成时去问）\n\n"
             f"【前面的对话】\n{context}\n\n"
         )
         if user_text:
@@ -359,7 +364,9 @@ class PlanaPipeline:
         """根据情感标签更新好感度与阶段（自动升降级）。"""
         rel = self.memory.get_relationship(user_id)
         stage = rel["stage"]
-        delta = EMOTION_SCORES.get(emotion, 0) * self.cfg.behavior.get("affinity_scale", 2)  # 情绪分 × 缩放系数
+        base = STAGE_BASE_SCORES.get(stage, 0)
+        scale = self.cfg.behavior.get("affinity_scale", 2)
+        delta = (EMOTION_SCORES.get(emotion, 0) + base) * scale  # （情绪分 + 阶段基础分）× 缩放系数
         if stage == "结婚" and delta < 0:
             delta = 0  # 结婚后好感度不下降
         new_affinity = self.memory.update_affinity(user_id, delta)
@@ -498,11 +505,18 @@ class PlanaPipeline:
             state = "finished"
         return {"state": state, "topic": data.get("topic", "")}
 
-    async def _topic_continuation(self, user_id: str, topic: str) -> str | None:
-        """生成一句自然的话题续接。"""
+    async def _topic_continuation(self, user_id: str, topic: str, user_text: str, display_text: str) -> str | None:
+        """生成一句自然的话题续接（带上文，避免与主回复重复或时态错乱）。"""
         prompt = (
             f"你们正在聊「{topic}」，这个话题还没结束。请主动、自然地把话题往下续一句"
-            "（可以是补充、感慨、或轻轻带出下一个相关点），15 字以内，符合普拉娜克制的性格，不要带情感标签。"
+            "（可以是补充、感慨、或轻轻带出下一个相关点），15 字以内，符合普拉娜克制的性格，不要带情感标签。\n"
+            "注意：\n"
+            "- 不要重复普拉娜刚才已经说过或问过的内容\n"
+            "- 老师正在做、或刚说要做的事，不要用「有…吗」「已经…了吗」这类完成时去问\n"
+            "- 时态要符合当下：还没发生的事用将来/进行，已经发生的事才用完成\n\n"
+            f"老师刚说：{user_text}\n"
+            f"普拉娜刚回复：{display_text}\n\n"
+            "只输出要续的那一句。"
         )
         messages = [
             {"role": "system", "content": self._system_prompt(user_id)},
