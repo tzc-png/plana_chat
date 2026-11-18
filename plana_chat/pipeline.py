@@ -579,6 +579,8 @@ class PlanaPipeline:
     async def _topic_suitability(self, user_id: str, topic_content: str, created_at: str) -> str:
         """判断挂起话题现在是否适合提起：suitable / stale / not_now。"""
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        recent = self.memory.recent(user_id, 3)
+        context = self._format_msgs(recent) if recent else "（无）"
         prompt = (
             "普拉娜之前挂起了一个未聊完的话题，现在想判断是否适合主动提起。\n"
             "请综合时效性和情景氛围判断：\n"
@@ -588,6 +590,7 @@ class PlanaPipeline:
             f"当前时间：{now}\n"
             f"话题挂起时间：{created_at}\n"
             f"话题内容：{topic_content}\n\n"
+            f"【老师最近的对话】\n{context}\n\n"
             '严格只输出 JSON：{"state": "suitable"|"stale"|"not_now"}'
         )
         messages = [
