@@ -321,6 +321,33 @@ class MemoryStore:
             conn.execute("UPDATE topics SET status='closed', updated_at=? WHERE id=?", (now, topic_id))
             conn.commit()
 
+    def mark_topic_in_progress(self, topic_id: int) -> None:
+        """把话题标记为「对话中」（用于吃醋事件拾起后的结算跟踪）。"""
+        now = datetime.now().strftime(_TIME_FMT)
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute("UPDATE topics SET status='in_progress', updated_at=? WHERE id=?", (now, topic_id))
+            conn.commit()
+
+    def get_in_progress_emotions(self, user_id: str, limit: int = 1) -> list[dict]:
+        """查「对话中」的吃醋/黑化事件。"""
+        with self._lock, closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT id, content FROM topics WHERE user_id=? AND type='plana_emotion' "
+                "AND status='in_progress' ORDER BY importance DESC, id DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        return [{"id": r["id"], "content": r["content"]} for r in rows]
+
+    def has_active_emotion(self, user_id: str) -> bool:
+        """是否有「挂起」或「对话中」的吃醋事件（用于抑制重复挂起）。"""
+        with self._lock, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM topics WHERE user_id=? AND type='plana_emotion' "
+                "AND status IN ('open','in_progress')",
+                (user_id,),
+            ).fetchone()
+        return row["c"] > 0
+
     def expire_open_topics(self, user_id: str, days: int = 3) -> list[dict]:
         """把超过 N 天仍未关闭的 open 话题标记为 closed，并返回（供调用方处理）。"""
         since = (datetime.now() - timedelta(days=days)).strftime(_TIME_FMT)

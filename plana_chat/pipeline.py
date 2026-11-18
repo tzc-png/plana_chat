@@ -487,12 +487,16 @@ class PlanaPipeline:
             logger.info("情感自检：%s → %s", emotion, result)
         return result
 
-    def _handle_special_emotion(self, user_id: str, emotion: str) -> None:
-        """吃醋/黑化等特殊情绪挂起到话题表（高优先级，且最多只挂一个）。"""
+    def _handle_special_emotion(self, user_id: str, emotion: str, user_text: str = "") -> None:
+        """吃醋/黑化等特殊情绪挂起到话题表（高优先级，且最多只挂一个）。
+
+        若已有「挂起」或「对话中」的吃醋事件，则不重复挂起（对话期间不产生新吃醋）。
+        """
         if emotion in ("sulky", "jealous"):
-            existing = self.memory.get_open_emotions(user_id, limit=1)
-            if not existing:
-                self.memory.add_topic(user_id, "plana_emotion", f"普拉娜{emotion}", importance=3)
+            if not self.memory.has_active_emotion(user_id):
+                cn = {"sulky": "吃醋", "jealous": "黑化"}.get(emotion, emotion)
+                ctx = f"（老师：{user_text[:40]}）" if user_text else ""
+                self.memory.add_topic(user_id, "plana_emotion", f"普拉娜{cn}{ctx}", importance=3)
 
     def _expire_topics(self, user_id: str, days: int = 3) -> None:
         """过期未消失的话题处理：情绪类话题消失时好感度 -6。"""
@@ -625,13 +629,30 @@ class PlanaPipeline:
         return text or None
 
     async def _resume_pending_topic(self, user_id: str) -> str | None:
-        """话题 finished 后，尝试拾起一条挂起的未完成话题；返回要发送的文案，None 表示静默。"""
+        """话题 finished 后，尝试拾起一条挂起事件（吃醋优先，其次未完成话题）。
+
+        吃醋事件拾起后进入「对话中」，等对话 finish 时结算安抚；未完成话题拾起即关闭。
+        返回要发送的文案，None 表示静默。
+        """
         if not await self._can_chat(user_id):
             return None
-        topics = self.memory.get_open_topics(user_id, type_="user_topic", limit=3)
-        if not topics:
-            return None
-        for t in topics:
+
+        # 1. 优先拾起吃醋/黑化事件（高优先级）
+        for e in self.memory.get_open_topics(user_id, type_="plana_emotion", limit=1):
+            state = await self._topic_suitability(user_id, e["content"], e.get("created_at", ""))
+            if state == "suitable":
+                text = await self._resume_emotion_text(user_id, e["content"])
+                if text:
+                    self.memory.mark_topic_in_progress(e["id"])  # 进入对话中，等 finish 结算
+                    logger.info("拾起吃醋事件：%s", e["content"])
+                    return text
+            elif state == "stale":
+                self.memory.close_topic(e["id"])
+                logger.info("吃醋事件已过时，关闭：%s", e["content"])
+            # not_now → 保留
+
+        # 2. 再拾起未完成话题
+        for t in self.memory.get_open_topics(user_id, type_="user_topic", limit=3):
             state = await self._topic_suitability(user_id, t["content"], t.get("created_at", ""))
             if state == "suitable":
                 text = await self._resume_topic_text(user_id, t["content"])
@@ -644,6 +665,61 @@ class PlanaPipeline:
                 logger.info("挂起话题已过时，关闭：%s", t["content"])
             # not_now → 保留，继续下一条
         return None
+
+    async def _resume_emotion_text(self, user_id: str, emotion_content: str) -> str | None:
+        """生成一句自然提起吃醋/黑化的文案（带一点小情绪，不带情感标签）。"""
+        prompt = (
+            f"普拉娜之前因为「{emotion_content}」对老师有点小情绪（吃醋/黑化），一直没消。\n"
+            "请生成一句自然、克制地提起这件事的文案（15 字左右，符合普拉娜性格，"
+            "可以带一点小情绪，不要带情感标签）。\n\n"
+            "只输出文案。"
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        text = strip_emotion_tag(raw).strip()
+        return text or None
+
+    async def _judge_soothing(self, user_id: str, emotion_content: str) -> bool:
+        """判断老师是否安抚成功了（吃醋/黑化事件对话结束后的结算）。"""
+        recent = self.memory.recent(user_id, 3)
+        context = self._format_msgs(recent) if recent else "（无）"
+        prompt = (
+            f"普拉娜之前因为「{emotion_content}」对老师有点小情绪（吃醋/黑化），这段对话刚结束。\n"
+            "请判断老师刚才是否安抚成功了（哄好了、认真道歉了、让普拉娜消气了）：\n"
+            "- 成功 → true\n"
+            "- 失败/没安抚/敷衍 → false\n\n"
+            f"【最近的对话】\n{context}\n\n"
+            '严格只输出 JSON：{"soothed": true} 或 {"soothed": false}'
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return False
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return False
+        return bool(data.get("soothed"))
+
+    async def _settle_emotion(self, user_id: str) -> bool:
+        """结算「对话中」的吃醋事件：安抚成功 +2、失败 -10，无论成败移除。返回是否发生了结算。"""
+        emotions = self.memory.get_in_progress_emotions(user_id, limit=1)
+        if not emotions:
+            return False
+        e = emotions[0]
+        success = await self._judge_soothing(user_id, e["content"])
+        delta = 2 if success else -10
+        self.memory.update_affinity(user_id, delta)
+        self.memory.close_topic(e["id"])
+        logger.info("吃醋事件结算：%s（%s，好感 %+d）", e["content"], "安抚成功" if success else "安抚失败", delta)
+        return True
 
     async def _detect_reminder(self, user_id: str, user_text: str) -> str | None:
         """判断老师这句话是否触发「稍后重新提醒」（要加班/要贪睡等）。"""

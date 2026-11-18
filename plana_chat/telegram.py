@@ -276,7 +276,7 @@ class TelegramBot:
 
         # 4.6 更新好感度与阶段；特殊情绪挂起
         self.pipeline._update_relationship(user_id, emotion)
-        self.pipeline._handle_special_emotion(user_id, emotion)
+        self.pipeline._handle_special_emotion(user_id, emotion, text)
 
         # 4.7 关系升级申请检测（喜欢→恋爱 / 恋爱→结婚）
         try:
@@ -349,15 +349,18 @@ class TelegramBot:
         elif decision["state"] == "switched" and decision["topic"]:
             self.pipeline.memory.add_topic(user_id, "user_topic", decision["topic"], importance=1)
         elif decision["state"] == "finished":
-            # 话题已收尾：若老师方便，尝试拾起一条挂起的未完成话题
-            resume = await self.pipeline._resume_pending_topic(user_id)
-            if resume:
-                try:
-                    resume, _ = await self.pipeline.self_review(user_id, text, resume, "neutral")
-                except Exception:
-                    pass
-                await self.send_text(chat_id, resume)
-                await self.pipeline.store_assistant(user_id, resume)
+            # 先结算「对话中」的吃醋事件（安抚成功 +2 / 失败 -10，静默）
+            settled = await self.pipeline._settle_emotion(user_id)
+            if not settled:
+                # 无在聊的吃醋事件：若老师方便，尝试拾起一条挂起事件
+                resume = await self.pipeline._resume_pending_topic(user_id)
+                if resume:
+                    try:
+                        resume, _ = await self.pipeline.self_review(user_id, text, resume, "neutral")
+                    except Exception:
+                        pass
+                    await self.send_text(chat_id, resume)
+                    await self.pipeline.store_assistant(user_id, resume)
 
     async def _reminder_loop(self) -> None:
         """每 60 秒检查一次是否有到期的提醒任务。"""
