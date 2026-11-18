@@ -230,7 +230,7 @@ plana help                 # 查看所有指令
 |---|---|---|
 | `FIFO` | 内存队列 | 老师发来、尚未处理的消息，按 `update_id` 顺序 |
 | `current_topic` | SQLite | 当前话题（一句话）+ 类型（`normal` / `emotion`）|
-| `topic_emotions` | 内存 | 当前话题累积的情感标签，随话题重置 |
+| `topic_emotions` | SQLite（current_topic.emotions）| 当前话题累积的情感标签，随话题重置；**持久化，意外退出不丢** |
 | `topics` | topics 表 | 挂起话题：普通话题（可反复挂起）+ 吃醋事件（一次性）|
 | 记忆 | messages/summaries/facts | 不变 |
 | `relationship` | relationship 表 | **已结算**好感度 + 阶段 |
@@ -277,7 +277,7 @@ while FIFO 非空:
 - 新消息不同话题 → **放弃当前回复**（状态未动），回主循环处理新消息
 
 **阶段 4 · 状态修改**（确认发送后一次性执行）：
-- 累积情感 `topic_emotions.append(emotion)`
+- 累积情感（立即持久化到 `current_topic.emotions`）
 - 吃醋挂起（sulky/jealous → 挂起，带老师原话缘由，去重）
 - 申请升级（阶段 2 命中升级 → `set_stage` + milestone）
 - 提醒检测（加班/睡 → 挂起 reminder）
