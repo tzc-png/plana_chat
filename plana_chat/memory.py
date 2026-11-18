@@ -295,18 +295,19 @@ class MemoryStore:
         with self._lock, closing(self._connect()) as conn:
             if type_:
                 rows = conn.execute(
-                    "SELECT id, type, content, importance FROM topics "
+                    "SELECT id, type, content, importance, created_at FROM topics "
                     "WHERE user_id=? AND status='open' AND type=? ORDER BY importance DESC, id DESC LIMIT ?",
                     (user_id, type_, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT id, type, content, importance FROM topics "
+                    "SELECT id, type, content, importance, created_at FROM topics "
                     "WHERE user_id=? AND status='open' ORDER BY importance DESC, id DESC LIMIT ?",
                     (user_id, limit),
                 ).fetchall()
         return [
-            {"id": r["id"], "type": r["type"], "content": r["content"], "importance": r["importance"]}
+            {"id": r["id"], "type": r["type"], "content": r["content"],
+             "importance": r["importance"], "created_at": r["created_at"]}
             for r in rows
         ]
 

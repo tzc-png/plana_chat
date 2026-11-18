@@ -348,6 +348,16 @@ class TelegramBot:
                 await self.pipeline.store_assistant(user_id, cont)
         elif decision["state"] == "switched" and decision["topic"]:
             self.pipeline.memory.add_topic(user_id, "user_topic", decision["topic"], importance=1)
+        elif decision["state"] == "finished":
+            # 话题已收尾：若老师方便，尝试拾起一条挂起的未完成话题
+            resume = await self.pipeline._resume_pending_topic(user_id)
+            if resume:
+                try:
+                    resume, _ = await self.pipeline.self_review(user_id, text, resume, "neutral")
+                except Exception:
+                    pass
+                await self.send_text(chat_id, resume)
+                await self.pipeline.store_assistant(user_id, resume)
 
     async def _reminder_loop(self) -> None:
         """每 60 秒检查一次是否有到期的提醒任务。"""

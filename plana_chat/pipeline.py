@@ -550,6 +550,98 @@ class PlanaPipeline:
         text = strip_emotion_tag(raw).strip()
         return text or None
 
+    # ── 挂起话题拾起（finished 后）────────────────────────────────────────
+    async def _can_chat(self, user_id: str) -> bool:
+        """判断老师现在是否方便继续聊天（只依据最近原话，不臆测）。"""
+        recent = self.memory.recent(user_id, 3)
+        context = self._format_msgs(recent) if recent else "（无）"
+        prompt = (
+            "请判断老师现在是否方便继续和普拉娜聊天。只依据老师最近的原话判断，不要臆测：\n"
+            "- 老师明确说了「要睡/睡了/晚安/去忙/开会/有事/先不聊/回头说」等 → 不方便（false）\n"
+            "- 普通聊天、没说离开 → 方便（true）\n\n"
+            f"【最近对话】\n{context}\n\n"
+            '严格只输出 JSON：{"chat": true} 或 {"chat": false}'
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return False
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return False
+        return bool(data.get("chat"))
+
+    async def _topic_suitability(self, user_id: str, topic_content: str, created_at: str) -> str:
+        """判断挂起话题现在是否适合提起：suitable / stale / not_now。"""
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        prompt = (
+            "普拉娜之前挂起了一个未聊完的话题，现在想判断是否适合主动提起。\n"
+            "请综合时效性和情景氛围判断：\n"
+            "- suitable：话题仍有意义、现在提起来自然\n"
+            "- stale：话题已失效/过时（事情已结束、明显是过去式），再提很突兀\n"
+            "- not_now：话题还有效，但当前氛围/时机不适合（如老师正忙、情绪不对），先保留\n\n"
+            f"当前时间：{now}\n"
+            f"话题挂起时间：{created_at}\n"
+            f"话题内容：{topic_content}\n\n"
+            '严格只输出 JSON：{"state": "suitable"|"stale"|"not_now"}'
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return "not_now"
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return "not_now"
+        state = data.get("state", "not_now")
+        return state if state in ("suitable", "stale", "not_now") else "not_now"
+
+    async def _resume_topic_text(self, user_id: str, topic_content: str) -> str | None:
+        """生成一句自然提起挂起话题的文案（15 字左右，不带情感标签）。"""
+        prompt = (
+            f"普拉娜之前和老师聊到一个话题没聊完，现在想自然地重新提起。\n"
+            f"请生成一句自然、克制的提起文案（15 字左右，符合普拉娜性格，不要带情感标签）。\n\n"
+            f"挂起的话题：{topic_content}\n\n"
+            "只输出文案。"
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        text = strip_emotion_tag(raw).strip()
+        return text or None
+
+    async def _resume_pending_topic(self, user_id: str) -> str | None:
+        """话题 finished 后，尝试拾起一条挂起的未完成话题；返回要发送的文案，None 表示静默。"""
+        if not await self._can_chat(user_id):
+            return None
+        topics = self.memory.get_open_topics(user_id, type_="user_topic", limit=3)
+        if not topics:
+            return None
+        for t in topics:
+            state = await self._topic_suitability(user_id, t["content"], t.get("created_at", ""))
+            if state == "suitable":
+                text = await self._resume_topic_text(user_id, t["content"])
+                self.memory.close_topic(t["id"])  # 无论是否生成成功都关闭，避免反复尝试
+                if text:
+                    logger.info("拾起挂起话题：%s", t["content"])
+                    return text
+            elif state == "stale":
+                self.memory.close_topic(t["id"])
+                logger.info("挂起话题已过时，关闭：%s", t["content"])
+            # not_now → 保留，继续下一条
+        return None
+
     async def _detect_reminder(self, user_id: str, user_text: str) -> str | None:
         """判断老师这句话是否触发「稍后重新提醒」（要加班/要贪睡等）。"""
         if not any(k in user_text for k in ("加班", "睡", "困", "忙", "赶", "熬夜", "贪睡", "赖床", "补觉", "再睡", "眯")):
