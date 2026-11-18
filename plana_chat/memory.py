@@ -127,6 +127,15 @@ class MemoryStore:
             )
             conn.commit()
 
+    def update_latest_user_embedding(self, user_id: str, embedding: bytes) -> None:
+        """回填最近一条 user 消息的 embedding（阶段2 计算后补上）。"""
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                "UPDATE messages SET embedding=? WHERE id=(SELECT MAX(id) FROM messages WHERE user_id=? AND role='user')",
+                (embedding, user_id),
+            )
+            conn.commit()
+
     def recent(self, user_id: str, n_rounds: int) -> list[dict]:
         with self._lock, closing(self._connect()) as conn:
             rows = conn.execute(

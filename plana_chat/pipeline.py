@@ -93,7 +93,6 @@ class PlanaPipeline:
         self.translator = Translator(cfg)
         self.memory = MemoryStore(cfg.memory.db_path)
         self.tts = TTSServerManager(cfg)
-        self._emb_cache: tuple[str, bytes | None] | None = None
 
         persona_file = Path(cfg.character.persona_file)
         if not persona_file.is_absolute():
@@ -142,7 +141,9 @@ class PlanaPipeline:
         """生成回复（不存储）：返回 (display_text, emotion)。"""
         await self._maybe_consolidate(user_id)
         history = self.memory.recent(user_id, self.cfg.memory.rounds)
-        user_emb = await self._embed_cached(user_text)
+        user_emb = await self._embed(user_text)
+        if user_emb is not None:
+            self.memory.update_latest_user_embedding(user_id, user_emb)
 
         # 可选：联网搜索增强
         user_content = user_text
@@ -202,9 +203,8 @@ class PlanaPipeline:
         return display_text, emotion
 
     async def store_user(self, user_id: str, user_text: str) -> None:
-        """阶段0：老师消息立即落库（不依赖后续是否发送）。"""
-        emb = await self._embed_cached(user_text)
-        self.memory.add(user_id, "user", user_text, embedding=emb)
+        """阶段0：老师消息立即落库（只存文本，embedding 延迟到阶段2 计算回填）。"""
+        self.memory.add(user_id, "user", user_text, embedding=None)
 
     async def make_voice(self, display_text: str) -> bytes | None:
         """生成语音（WAV 字节）；纯文字模式返回 None。"""
@@ -329,14 +329,6 @@ class PlanaPipeline:
             )
         except Exception:
             logger.warning("记忆整理失败 user=%s", user_id, exc_info=True)
-
-    async def _embed_cached(self, text: str) -> bytes | None:
-        """带缓存的 embedding：同一文本（如 store_user 与 generate 的同一条消息）只算一次。"""
-        if self._emb_cache is not None and self._emb_cache[0] == text:
-            return self._emb_cache[1]
-        emb = await self._embed(text)
-        self._emb_cache = (text, emb)
-        return emb
 
     async def _embed(self, text: str) -> bytes | None:
         """本地 embedding，返回 float32 字节；失败返回 None。"""
