@@ -55,4 +55,6 @@ class Translator:
                 "\033[31m[降级] 翻译云端失败，已切换到本地 Ollama：%s\033[0m", e
             )
             result = await self._local_llm.chat(messages)
-        return "".join(result.split())
+        result_clean = "".join(result.split())
+        logger.debug("翻译请求：%s → %s", text[:40], result_clean[:40])
+        return result_clean

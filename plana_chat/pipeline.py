@@ -243,7 +243,7 @@ class PlanaPipeline:
 
     async def _chat_with_fallback(self, messages: list[dict]) -> str:
         try:
-            return await self.llm.chat(messages)
+            raw = await self.llm.chat(messages)
         except Exception as e:
             if self.local_llm is not None and self.local_llm is not self.llm:
                 reason = self._degrade_reason(str(e))
@@ -253,8 +253,13 @@ class PlanaPipeline:
                     )
                 else:
                     logger.warning("[降级] 云端调用失败，已切换到本地 Ollama：%s", e)
-                return await self.local_llm.chat(messages)
-            raise
+                raw = await self.local_llm.chat(messages)
+            else:
+                raise
+        last_user = messages[-1]["content"] if messages else ""
+        logger.debug("LLM 请求：%s", last_user[:80].replace("\n", " "))
+        logger.debug("LLM 返回：%s", raw[:80].replace("\n", " "))
+        return raw
 
     @staticmethod
     def _degrade_reason(err: str) -> str | None:
@@ -327,6 +332,7 @@ class PlanaPipeline:
 
     async def _embed(self, text: str) -> bytes | None:
         """本地 embedding，返回 float32 字节；失败返回 None。"""
+        logger.debug("embedding 请求：%s", text[:40].replace("\n", " "))
         try:
             emb = await embed_text(
                 text,
@@ -397,7 +403,9 @@ class PlanaPipeline:
             data = json.loads(m.group(0))
         except Exception:
             return False
-        return bool(data.get("apply"))
+        apply = bool(data.get("apply"))
+        logger.info("申请判定：%s", "是" if apply else "否")
+        return apply
 
     async def _handle_application(self, user_id: str, user_text: str) -> str | None:
         """处理关系申请，返回 "恋爱"/"结婚"（升级）、"reject"（表白但好感度不足）、None（非表白）。"""
@@ -462,7 +470,10 @@ class PlanaPipeline:
         ]
         raw = await self._chat_with_fallback(messages)
         new_emotion = raw.strip()
-        return new_emotion if new_emotion in EMOTION_SCORES else emotion
+        result = new_emotion if new_emotion in EMOTION_SCORES else emotion
+        if result != emotion:
+            logger.info("情感自检：%s → %s", emotion, result)
+        return result
 
     def _handle_special_emotion(self, user_id: str, emotion: str) -> None:
         """吃醋/黑化等特殊情绪挂起到话题表（高优先级，且最多只挂一个）。"""
@@ -503,6 +514,7 @@ class PlanaPipeline:
         state = data.get("state", "finished")
         if state not in ("finished", "continuing", "switched"):
             state = "finished"
+        logger.info("话题判定：%s（topic=%s）", state, data.get("topic", ""))
         return {"state": state, "topic": data.get("topic", "")}
 
     async def _topic_continuation(self, user_id: str, topic: str, user_text: str, display_text: str) -> str | None:
@@ -692,6 +704,7 @@ class PlanaPipeline:
             ja = await self.translator.translate(voice_text)
             if not ja:
                 return None
+            logger.debug("TTS 请求：%s", ja[:60])
 
             # TTS 为阻塞操作，放到线程避免卡事件循环
             return await asyncio.to_thread(self._synth_blocking, ja)

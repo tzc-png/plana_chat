@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
 import time
 from datetime import datetime
@@ -432,11 +433,16 @@ class TelegramBot:
 
 
 async def main() -> None:
+    # 默认 INFO；PLANA_VERBOSE=1（plana uptodate）时只把 plana_chat 提到 DEBUG
+    verbose = os.environ.get("PLANA_VERBOSE") == "1"
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
-    # 关闭 httpx 的 INFO 日志，避免把含 token 的完整 URL 打进日志
+    # 关闭 httpx/httpcore 的日志，避免含 token 的 URL 或底层网络细节刷屏
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    if verbose:
+        logging.getLogger("plana_chat").setLevel(logging.DEBUG)
     bot = TelegramBot(load_config())
     await bot.run()

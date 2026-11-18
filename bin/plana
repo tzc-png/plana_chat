@@ -43,6 +43,7 @@ stop_bg() {
 usage() {
     cat <<'EOF'
   on          后台启动机器人（非 systemd 模式，日志见 data/plana.log）
+  uptodate    前台运行并实时打印对话/请求/分支决策（Ctrl+C 停止）
   off         停止机器人并释放语音引擎
   quiet       切换为 quiet 模式（免打扰，关闭主动问候/追问）
   active      切换为 active 模式（总是追问）
@@ -79,6 +80,24 @@ case "${1:-}" in
       rm -f "$PID_FILE"
       exit 1
     fi
+    ;;
+
+  uptodate)
+    if systemd_active; then
+      echo "错误：systemd 服务正在运行，请先执行 plana system_off" >&2
+      exit 1
+    fi
+    if is_running; then
+      echo "错误：后台实例正在运行（PID $(cat "$PID_FILE")），请先执行 plana off" >&2
+      exit 1
+    fi
+    mkdir -p "$DATA_DIR"
+    cd "$PLANA_ROOT" || exit 1
+    echo "已切换到 uptodate 前台模式（Ctrl+C 停止，日志直接输出到本终端）……"
+    echo $$ > "$PID_FILE"
+    trap 'rm -f "$PID_FILE"; exit 0' INT TERM
+    PLANA_VERBOSE=1 "$VENV_PY" "$RUNNER"
+    rm -f "$PID_FILE"
     ;;
 
   off)
