@@ -152,11 +152,14 @@ cp .env.example .env
 
 ```bash
 source .venv/bin/activate
-python scripts/verify_llm.py        # 对话引擎：DeepSeek / Ollama 各回一条
+python scripts/test_core.py        # 核心逻辑回归测试（不依赖外部服务，秒级）
+python scripts/verify_llm.py       # 对话引擎：DeepSeek / Ollama 各回一条
 python scripts/verify_tts.py "おはようございます"   # 语音：直接合成一句日语，产出 wav
 ```
 
-`verify_tts.py` 输出 wav 路径和时长即成功（首次会加载模型，约 1 分钟）。
+`test_core.py` 覆盖情感标签清洗、记忆读写、好感度/关系阶段等纯逻辑；`verify_tts.py` 输出 wav 路径和时长即成功（首次会加载模型，约 1 分钟）。
+
+> ⚠️ 顺序注意：`verify_llm.py` 的降级测试会加载 Ollama `qwen2.5:14b`（约 7GB）到显存，紧接着跑 `verify_tts.py` 可能因显存不足失败——这是 8GB 显存下的正常争抢，先 `ollama stop qwen2.5:14b` 释放即可。
 
 ### 8. 安装 `plana` 命令并启动
 
@@ -241,15 +244,19 @@ plana help                 # 查看所有指令
 
 ### 动态认知系统（好感度 + 关系阶段）
 
-普拉娜对你有好感度（0 起），随每轮对话的情感标签增减：
+普拉娜对你有好感度（0 起），每轮对话按「情感分 + 阶段基础分」叠加，再乘缩放系数 `affinity_scale`（默认 2）：
 
-| 情感 | 变化 |
+| 情感 | 情感分 |
 |---|---|
 | love | +3 |
 | like / delighted | +2 |
 | sheepish / cheerful / expectant | +1 |
 | neutral / puzzled / sulky | 0 |
 | dumbfounded / jealous | -1 |
+
+阶段基础分：**陌生 +2、熟悉 +1**（保证早期关系稳步升温，不会因情感长期 neutral 而停滞；喜欢/恋爱/结婚阶段基础分为 0）。
+
+> 实际变化 = (情感分 + 阶段基础分) × `affinity_scale`
 
 好感度决定关系阶段：
 
