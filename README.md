@@ -199,7 +199,7 @@ plana help                 # 查看所有指令
 | | `topic_fresh_hours` / `topic_idle_minutes` | 挂起话题「新鲜」时间窗（小时，默认 1）/ 话题静默超时（分钟，默认 60，超时自动结算） |
 | `reply` | `mode` | `text_voice`（文字+语音，默认）/ `voice` / `text` |
 | `telegram` | `token_env` / `proxy` / `allow_user_ids` | token 环境变量名 / 代理地址 / 用户白名单（空=不限制） |
-| `greeting` | `enabled` / `times` / `chat_ids` / `reminder_minutes` | 主动问候开关 / 时刻 / 目标用户 / 重新提醒间隔（分钟） |
+| `greeting` | `enabled` / `times` / `chat_ids` / `reminder_minutes` / `meal_duration_hours` | 主动问候开关 / 时刻 / 目标用户 / 重新提醒间隔（分钟）/ 吃饭动作持续时间（小时，默认 2，超过则视为已吃完） |
 | `behavior` | `mode` / `follow_up` / `settle_delay` / `self_review` / `affinity_scale` | 运行模式 / 话题续接开关 / 发送前等待（秒）/ 文本与情感自检开关 / 好感度缩放系数（默认2） |
 | `emotion` | `enabled` / `image_dir` | 表情图开关（默认关）/ 表情图目录（见下） |
 | `search` | `enabled` | 智能搜索开关（默认关） |
