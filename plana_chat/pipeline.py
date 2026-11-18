@@ -860,14 +860,17 @@ class PlanaPipeline:
         else:
             period = "晚上"
         recent = self.memory.recent(user_id, self.cfg.memory.rounds)
-        background = self._format_msgs(recent[-6:]) if recent else "（暂无历史，这是第一次问候）"
+        user_msgs = [m["content"] for m in recent if m["role"] == "user"]
+        background = "\n".join(f"老师：{c}" for c in user_msgs[-3:]) if user_msgs else "（暂无历史，这是第一次问候）"
 
         hint = (
             f"现在是 {now.strftime('%H:%M')}（{period}）。请主动给老师发一句问候，"
-            "并参考下面的「最近对话背景」判断情境、做出合理反应：\n"
+            "下面是老师最近说的几句原话（可能是一段时间前说的，不代表老师当下的状态），"
+            "只据此了解大致情境，不要擅自演绎老师正在做什么：\n"
             "- 先仔细分辨老师最近的原话：\n"
             "  * 若明确说「睡了/晚安/睡觉/要睡了」等，才可演绎成「偷偷开门看了一眼，发现老师已经睡着了」之类的轻声自言自语\n"
             "  * 若只说「休息/先休息/去休息」等，可能只是回去歇着、不一定睡着，就正常关心一句（如「好好休息」），不要演绎成睡着了\n"
+            "  * 只有老师明确说「要出门/在路上/准备走/去某地」等，才可关心「路上慢点/加件外套/注意安全」；若只是提到「去吃晚饭/下班/回家了」等，不代表现在正在出门，不要擅自演绎成「老师正要出门」\n"
             "- 若老师提到生病、不舒服、熬夜、加班等，要表现出关心\n"
             "- 若没有特殊情况，就按当前时间自然问候\n"
             "问候要简短自然，动作可写在括号里，末尾加情感标签 [emotion:xxx]。\n\n"

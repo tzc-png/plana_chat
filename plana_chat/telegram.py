@@ -28,9 +28,10 @@ class TelegramBot:
         self.api = f"https://api.telegram.org/bot{self.token}"
         self.proxy = cfg.telegram.get("proxy", "")
         self.pipeline = build_pipeline(cfg)
-        self.offset = 0
         self._greeted: dict[str, str] = {}  # {时间: 上次问候日期}，避免重复问候
         self._state_file = Path(__file__).resolve().parent.parent / "data" / "state.json"
+        self._offset_file = Path(__file__).resolve().parent.parent / "data" / "offset"
+        self.offset = self._load_offset()
         self.mode = self._load_mode()
         self.fifo: deque[tuple[int, str, str]] = deque()  # (chat_id, user_id, text)
 
@@ -51,6 +52,7 @@ class TelegramBot:
             updates = resp.json().get("result", [])
         if updates:
             self.offset = max(u["update_id"] for u in updates) + 1
+            self._save_offset()
         for upd in updates:
             msg = upd.get("message")
             if not msg or "text" not in msg:
@@ -134,6 +136,19 @@ class TelegramBot:
             logger.exception("发送表情图失败 emotion=%s", emotion)
 
     # ── 模式状态（quiet / active / default）──────────────────────────────
+    def _load_offset(self) -> int:
+        try:
+            return int(self._offset_file.read_text().strip())
+        except Exception:
+            return 0
+
+    def _save_offset(self) -> None:
+        try:
+            self._offset_file.parent.mkdir(parents=True, exist_ok=True)
+            self._offset_file.write_text(str(self.offset))
+        except Exception:
+            logger.warning("保存 offset 失败", exc_info=True)
+
     def _load_mode(self) -> str:
         try:
             data = json.loads(self._state_file.read_text())
