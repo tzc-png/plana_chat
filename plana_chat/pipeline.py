@@ -403,12 +403,12 @@ class PlanaPipeline:
             else:
                 delta = min(delta, cap - affinity)
 
+        self._clear_topic_emotions(user_id)  # 先清空，避免「已结算未清空」导致崩溃后重复结算
         new_affinity = self.memory.update_affinity(user_id, delta)
         new_stage = self._compute_stage(new_affinity, stage)
         if new_stage != stage:
             self.memory.set_stage(user_id, new_stage)
             logger.info("关系阶段变化：%s → %s（好感度 %d）", stage, new_stage, new_affinity)
-        self._clear_topic_emotions(user_id)
         logger.info("话题好感度结算：平均 %.2f → %+d，好感 %d", avg, delta, new_affinity)
         return self.memory.get_relationship(user_id)
 
