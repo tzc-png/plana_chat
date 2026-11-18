@@ -559,6 +559,8 @@ class PlanaPipeline:
             # 首次对话，无当前话题：视为新话题，直接进入
             return {"has_content": True, "same": True, "topic": user_text[:40], "old_context": ""}
 
+        recent = self.memory.recent(user_id, 3)
+        context = self._format_msgs(recent) if recent else "（无）"
         prompt = (
             "请判断老师这句话，输出四个字段：\n"
             "1. has_content：这句话是否有实际指向（「嗯嗯」「哦」「这样啊」等无营养内容 → false）\n"
@@ -567,6 +569,7 @@ class PlanaPipeline:
             "4. old_context：仅当 same=false 时，之前那个话题的简短描述 + 未完成部分\n\n"
             f"当前话题：{cur['topic']}（类型：{cur['kind']}）\n"
             f"老师这句话：{user_text}\n\n"
+            f"【最近的对话】\n{context}\n\n"
             '严格只输出 JSON：{"has_content": true|false, "same": true|false, "topic": "...", "old_context": "..."}'
         )
         messages = [
