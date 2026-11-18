@@ -267,6 +267,7 @@ class TelegramBot:
             nchat, nuser, ntext = self.fifo[0]  # peek 队头
             njudge = await self.pipeline._judge_topic(user_id, ntext)
             if not njudge["has_content"]:
+                logger.info("忽略无营养新消息：%s", ntext)
                 break  # 无营养 → 忽略（留在 FIFO），发送当前回复
             if not njudge["same"]:
                 logger.info("发送前发现新话题，放弃当前回复：%s", ntext)

@@ -372,6 +372,7 @@ class PlanaPipeline:
     def _accumulate_emotion(self, user_id: str, emotion: str) -> None:
         """当前话题累积一个情感标签（确认发送后调用）。"""
         self._topic_emotions.setdefault(user_id, []).append(emotion)
+        logger.debug("累积情感：%s（当前话题共 %d 个）", emotion, len(self._topic_emotions[user_id]))
 
     def _clear_topic_emotions(self, user_id: str) -> None:
         self._topic_emotions.pop(user_id, None)
@@ -523,7 +524,9 @@ class PlanaPipeline:
             if not self.memory.has_active_emotion(user_id):
                 cn = {"sulky": "吃醋", "jealous": "黑化"}.get(emotion, emotion)
                 ctx = f"（老师：{user_text[:40]}）" if user_text else ""
-                self.memory.add_topic(user_id, "plana_emotion", f"普拉娜{cn}{ctx}", importance=3)
+                content = f"普拉娜{cn}{ctx}"
+                self.memory.add_topic(user_id, "plana_emotion", content, importance=3)
+                logger.info("挂起吃醋事件：%s", content)
 
     def _expire_topics(self, user_id: str, days: int = 3) -> None:
         """过期未关闭的挂起话题直接关闭（无好感度副作用；吃醋切走即结算）。"""
