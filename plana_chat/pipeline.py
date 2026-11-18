@@ -64,8 +64,8 @@ STAGE_PROMPTS = {
     "结婚": "【当前关系】你们已经结婚。稳定默契、安心自然，偶尔流露老夫老妻的平淡幸福。动作自然亲密，不再羞涩。老师提到别的女生，会露出轻微的吃醋，但更多是信任。",
 }
 
-# 阶段阈值（好感度达到才可进入该阶段）
-STAGE_THRESHOLDS = {"陌生": 0, "熟悉": 11, "喜欢": 31, "恋爱": 61, "结婚": 101}
+# 阶段阈值（好感度达到才可进入该阶段；恋爱/结婚为申请阈值）
+STAGE_THRESHOLDS = {"陌生": 0, "熟悉": 11, "喜欢": 31, "恋爱": 60, "结婚": 100}
 
 # 关系升级/申请时的「特殊时刻」语气（用于申请命中后重新生成回复）
 SPECIAL_MOMENTS = {
@@ -370,11 +370,23 @@ class PlanaPipeline:
         """根据情感标签更新好感度与阶段（自动升降级）。"""
         rel = self.memory.get_relationship(user_id)
         stage = rel["stage"]
+        affinity = rel["affinity"]
         base = STAGE_BASE_SCORES.get(stage, 0)
         scale = self.cfg.behavior.get("affinity_scale", 2)
         delta = (EMOTION_SCORES.get(emotion, 0) + base) * scale  # （情绪分 + 阶段基础分）× 缩放系数
         if stage == "结婚" and delta < 0:
             delta = 0  # 结婚后好感度不下降
+        # 喜欢/恋爱阶段：确认关系（进入下一阶段）前好感度封顶——可降、不可升过阈值
+        cap = None
+        if stage == "喜欢":
+            cap = STAGE_THRESHOLDS["恋爱"]
+        elif stage == "恋爱":
+            cap = STAGE_THRESHOLDS["结婚"]
+        if cap is not None and delta > 0:
+            if affinity >= cap:
+                delta = 0
+            else:
+                delta = min(delta, cap - affinity)
         new_affinity = self.memory.update_affinity(user_id, delta)
         new_stage = self._compute_stage(new_affinity, stage)
         if new_stage != stage:
