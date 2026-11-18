@@ -93,6 +93,14 @@ class MemoryStore:
                 )"""
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_topics_user ON topics(user_id, status, id)")
+            conn.execute(
+                """CREATE TABLE IF NOT EXISTS current_topic (
+                    user_id TEXT PRIMARY KEY,
+                    topic TEXT NOT NULL,
+                    kind TEXT NOT NULL DEFAULT 'normal',
+                    updated_at TEXT NOT NULL
+                )"""
+            )
             # 旧库迁移：补列
             self._ensure_column(conn, "messages", "embedding", "BLOB")
             self._ensure_column(conn, "summaries", "consolidated_upto", "INTEGER NOT NULL DEFAULT 0")
@@ -280,6 +288,27 @@ class MemoryStore:
             )
             conn.commit()
 
+    # ── 当前话题 ──────────────────────────────────────────────────────────
+    def get_current_topic(self, user_id: str) -> dict:
+        """返回 {topic, kind}；无记录返回空话题。"""
+        with self._lock, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT topic, kind FROM current_topic WHERE user_id=?", (user_id,)
+            ).fetchone()
+        if row is None:
+            return {"topic": "", "kind": "normal"}
+        return {"topic": row["topic"], "kind": row["kind"]}
+
+    def set_current_topic(self, user_id: str, topic: str, kind: str = "normal") -> None:
+        now = datetime.now().strftime(_TIME_FMT)
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO current_topic(user_id, topic, kind, updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET topic=excluded.topic, kind=excluded.kind, updated_at=excluded.updated_at",
+                (user_id, topic, kind, now),
+            )
+            conn.commit()
+
     # ── 话题表 ──────────────────────────────────────────────────────────
     def add_topic(self, user_id: str, type_: str, content: str, importance: int = 1) -> None:
         now = datetime.now().strftime(_TIME_FMT)
@@ -291,19 +320,23 @@ class MemoryStore:
             )
             conn.commit()
 
-    def get_open_topics(self, user_id: str, type_: str | None = None, limit: int = 5) -> list[dict]:
+    def get_open_topics(self, user_id: str, type_: str | None = None, limit: int = 5, fresh_hours: float = 1) -> list[dict]:
+        """挂起话题，按三层优先级：新鲜(N小时内)→吃醋→普通，内部时间倒序。"""
+        since = (datetime.now() - timedelta(hours=fresh_hours)).strftime(_TIME_FMT)
         with self._lock, closing(self._connect()) as conn:
             if type_:
                 rows = conn.execute(
                     "SELECT id, type, content, importance, created_at FROM topics "
-                    "WHERE user_id=? AND status='open' AND type=? ORDER BY importance DESC, id DESC LIMIT ?",
+                    "WHERE user_id=? AND status='open' AND type=? ORDER BY created_at DESC, id DESC LIMIT ?",
                     (user_id, type_, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
                     "SELECT id, type, content, importance, created_at FROM topics "
-                    "WHERE user_id=? AND status='open' ORDER BY importance DESC, id DESC LIMIT ?",
-                    (user_id, limit),
+                    "WHERE user_id=? AND status='open' "
+                    "ORDER BY CASE WHEN created_at>=? THEN 0 WHEN type='plana_emotion' THEN 1 ELSE 2 END, "
+                    "created_at DESC, id DESC LIMIT ?",
+                    (user_id, since, limit),
                 ).fetchall()
         return [
             {"id": r["id"], "type": r["type"], "content": r["content"],
@@ -321,32 +354,17 @@ class MemoryStore:
             conn.execute("UPDATE topics SET status='closed', updated_at=? WHERE id=?", (now, topic_id))
             conn.commit()
 
-    def mark_topic_in_progress(self, topic_id: int) -> None:
-        """把话题标记为「对话中」（用于吃醋事件拾起后的结算跟踪）。"""
-        now = datetime.now().strftime(_TIME_FMT)
-        with self._lock, closing(self._connect()) as conn:
-            conn.execute("UPDATE topics SET status='in_progress', updated_at=? WHERE id=?", (now, topic_id))
-            conn.commit()
-
-    def get_in_progress_emotions(self, user_id: str, limit: int = 1) -> list[dict]:
-        """查「对话中」的吃醋/黑化事件。"""
-        with self._lock, closing(self._connect()) as conn:
-            rows = conn.execute(
-                "SELECT id, content FROM topics WHERE user_id=? AND type='plana_emotion' "
-                "AND status='in_progress' ORDER BY importance DESC, id DESC LIMIT ?",
-                (user_id, limit),
-            ).fetchall()
-        return [{"id": r["id"], "content": r["content"]} for r in rows]
-
     def has_active_emotion(self, user_id: str) -> bool:
-        """是否有「挂起」或「对话中」的吃醋事件（用于抑制重复挂起）。"""
+        """是否有活跃吃醋事件：挂起的吃醋 OR 当前话题就是吃醋。"""
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT COUNT(*) AS c FROM topics WHERE user_id=? AND type='plana_emotion' "
-                "AND status IN ('open','in_progress')",
+                "SELECT COUNT(*) AS c FROM topics WHERE user_id=? AND type='plana_emotion' AND status='open'",
                 (user_id,),
             ).fetchone()
-        return row["c"] > 0
+            cur = conn.execute(
+                "SELECT kind FROM current_topic WHERE user_id=?", (user_id,)
+            ).fetchone()
+        return row["c"] > 0 or (cur is not None and cur["kind"] == "emotion")
 
     def expire_open_topics(self, user_id: str, days: int = 3) -> list[dict]:
         """把超过 N 天仍未关闭的 open 话题标记为 closed，并返回（供调用方处理）。"""

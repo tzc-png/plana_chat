@@ -50,6 +50,7 @@ memory:
   compact_threshold: 20        # 未整理消息数超过该值触发总结压缩 + 事实抽取
   embedding_model: "bge-m3"          # Ollama 本地 embedding 模型（中文语义检索，多语种）
   retrieve_top_k: 5            # 语义检索注入的历史条数
+  topic_fresh_hours: 1         # 挂起话题「新鲜」时间窗（小时），此窗口内优先拾起
 
 reply:
   mode: text_voice             # text_voice | voice | text

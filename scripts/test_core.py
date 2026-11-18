@@ -85,9 +85,9 @@ def test_memory() -> None:
 def test_relationship() -> None:
     print("== 关系系统 ==")
     check("STAGE_BASE_SCORES 陌生=2 熟悉=1", STAGE_BASE_SCORES == {"陌生": 2, "熟悉": 1})
-    check("阈值顺序正确", STAGE_THRESHOLDS == {"陌生": 0, "熟悉": 11, "喜欢": 31, "恋爱": 61, "结婚": 101})
+    check("阈值顺序正确", STAGE_THRESHOLDS == {"陌生": 0, "熟悉": 11, "喜欢": 31, "恋爱": 60, "结婚": 100})
 
-    # 基础好感度叠加（修「关系阶段停滞」）
+    # 基础好感度叠加（话题级：陌生 +2 / 熟悉 +1，受 scale 调控）
     scale = 2
     for stage, base in STAGE_BASE_SCORES.items():
         d_neutral = (EMOTION_SCORES["neutral"] + base) * scale
@@ -95,19 +95,22 @@ def test_relationship() -> None:
         check(f"{stage}+neutral delta={d_neutral:+d}", d_neutral == (base * scale))
         check(f"{stage}+like delta={d_like:+d}", d_like == ((2 + base) * scale))
 
-    # 用最小假对象跑 _update_relationship，验证真实累计与阶段升级
+    # 话题级好感度结算（累积情感 → 结算）
     cfg = Config({"behavior": {"affinity_scale": 2}})
     tmp = tempfile.mktemp(suffix=".db")
     fake = SimpleNamespace(
         memory=MemoryStore(tmp),
         cfg=cfg,
         _compute_stage=lambda affinity, stage: PlanaPipeline._compute_stage(None, affinity, stage),
+        _topic_emotions={},
     )
+    fake._clear_topic_emotions = lambda uid: fake._topic_emotions.pop(uid, None)
 
-    for i in range(3):
-        PlanaPipeline._update_relationship(fake, "u1", "neutral")  # 陌生 + neutral → 每轮 +4
+    for _ in range(3):
+        PlanaPipeline._accumulate_emotion(fake, "u1", "neutral")
+        PlanaPipeline._settle_topic_affinity(fake, "u1")
     rel = fake.memory.get_relationship("u1")
-    check("陌生 3 轮 neutral 升到熟悉", rel["stage"] == "熟悉" and rel["affinity"] == 12)
+    check("3 个陌生话题(各 neutral)升到熟悉 +12", rel["stage"] == "熟悉" and rel["affinity"] == 12)
 
     # 阶段升降级（_compute_stage 只依赖模块常量，self 传 None）
     cs = PlanaPipeline._compute_stage
@@ -115,7 +118,7 @@ def test_relationship() -> None:
     check("熟悉→喜欢(31)", cs(None, 31, "熟悉") == "喜欢")
     check("熟悉→陌生(<11)", cs(None, 10, "熟悉") == "陌生")
     check("喜欢→熟悉(<31)", cs(None, 30, "喜欢") == "熟悉")
-    check("恋爱→喜欢(<61)", cs(None, 60, "恋爱") == "喜欢")
+    check("恋爱→喜欢(<60)", cs(None, 59, "恋爱") == "喜欢")
     check("恋爱不自动升结婚(需申请)", cs(None, 200, "恋爱") == "恋爱")
     check("结婚锁定不降", cs(None, 0, "结婚") == "结婚")
 

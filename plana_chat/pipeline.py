@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import re
 import tempfile
 from dataclasses import dataclass
@@ -97,6 +98,9 @@ class PlanaPipeline:
         if not persona_file.is_absolute():
             persona_file = Path(__file__).resolve().parent.parent / persona_file
         self.persona_template = persona_file.read_text(encoding="utf-8")
+
+        # 当前话题累积的情感标签（内存态，随话题重置）
+        self._topic_emotions: dict[str, list[str]] = {}
 
     # ── prompt 构建 ──────────────────────────────────────────────────────────
     def _system_prompt(self, user_id: str, special_hint: str | None = None) -> str:
@@ -199,12 +203,10 @@ class PlanaPipeline:
         display_text = strip_emotion_tag(raw)
         return display_text, emotion
 
-    async def store(self, user_id: str, user_text: str, display_text: str, emotion: str) -> None:
-        """存储一轮对话（带 embedding，原文永久保留）。"""
-        user_emb = await self._embed(user_text)
-        self.memory.add(user_id, "user", user_text, embedding=user_emb)
-        assistant_emb = await self._embed(display_text)
-        self.memory.add(user_id, "assistant", display_text, emotion, embedding=assistant_emb)
+    async def store_user(self, user_id: str, user_text: str) -> None:
+        """阶段0：老师消息立即落库（不依赖后续是否发送）。"""
+        emb = await self._embed(user_text)
+        self.memory.add(user_id, "user", user_text, embedding=emb)
 
     async def make_voice(self, display_text: str) -> bytes | None:
         """生成语音（WAV 字节）；纯文字模式返回 None。"""
@@ -366,17 +368,32 @@ class PlanaPipeline:
             return "喜欢"
         return current_stage
 
-    def _update_relationship(self, user_id: str, emotion: str) -> dict:
-        """根据情感标签更新好感度与阶段（自动升降级）。"""
+    # ── 话题级好感度 ────────────────────────────────────────────────────
+    def _accumulate_emotion(self, user_id: str, emotion: str) -> None:
+        """当前话题累积一个情感标签（确认发送后调用）。"""
+        self._topic_emotions.setdefault(user_id, []).append(emotion)
+
+    def _clear_topic_emotions(self, user_id: str) -> None:
+        self._topic_emotions.pop(user_id, None)
+
+    def _settle_topic_affinity(self, user_id: str) -> dict:
+        """结算当前话题的好感度（话题 finished 或切走时触发）。"""
+        emotions = self._topic_emotions.get(user_id, [])
+        if not emotions:
+            return self.memory.get_relationship(user_id)
+
+        avg = sum(EMOTION_SCORES.get(e, 0) for e in emotions) / len(emotions)
+        emotion_score = int(math.ceil(abs(avg))) * (1 if avg >= 0 else -1)  # 绝对值向上取整，保留符号
+
         rel = self.memory.get_relationship(user_id)
         stage = rel["stage"]
         affinity = rel["affinity"]
         base = STAGE_BASE_SCORES.get(stage, 0)
         scale = self.cfg.behavior.get("affinity_scale", 2)
-        delta = (EMOTION_SCORES.get(emotion, 0) + base) * scale  # （情绪分 + 阶段基础分）× 缩放系数
+        delta = (emotion_score + base) * scale
         if stage == "结婚" and delta < 0:
             delta = 0  # 结婚后好感度不下降
-        # 喜欢/恋爱阶段：确认关系（进入下一阶段）前好感度封顶——可降、不可升过阈值
+        # 喜欢/恋爱阶段封顶：可降、不可升过阈值
         cap = None
         if stage == "喜欢":
             cap = STAGE_THRESHOLDS["恋爱"]
@@ -387,12 +404,21 @@ class PlanaPipeline:
                 delta = 0
             else:
                 delta = min(delta, cap - affinity)
+
         new_affinity = self.memory.update_affinity(user_id, delta)
         new_stage = self._compute_stage(new_affinity, stage)
         if new_stage != stage:
             self.memory.set_stage(user_id, new_stage)
             logger.info("关系阶段变化：%s → %s（好感度 %d）", stage, new_stage, new_affinity)
+        self._clear_topic_emotions(user_id)
+        logger.info("话题好感度结算：平均 %.2f → %+d，好感 %d", avg, delta, new_affinity)
         return self.memory.get_relationship(user_id)
+
+    def _hang_topic(self, user_id: str, topic: str, context: str = "") -> None:
+        """切话题时，把旧话题挂起（含未完成上下文）。"""
+        content = topic + (f"（未完成：{context}）" if context else "")
+        self.memory.add_topic(user_id, "user_topic", content, importance=1)
+        logger.info("挂起话题：%s", content)
 
     async def _check_application(self, user_id: str, user_text: str, desc: str) -> bool:
         """判断老师这句话是否在明确认真地申请升级关系。"""
@@ -419,7 +445,7 @@ class PlanaPipeline:
         return apply
 
     async def _handle_application(self, user_id: str, user_text: str) -> str | None:
-        """处理关系申请，返回 "恋爱"/"结婚"（升级）、"reject"（表白但好感度不足）、None（非表白）。"""
+        """判断申请，返回 'reject'/'恋爱'/'结婚'/None（**不修改状态**，升级在 _apply_upgrade）。"""
         rel = self.memory.get_relationship(user_id)
         stage, affinity = rel["stage"], rel["affinity"]
         if stage == "结婚":
@@ -429,24 +455,25 @@ class PlanaPipeline:
             desc, threshold, target = "结婚", STAGE_THRESHOLDS["结婚"], "结婚"
         else:
             desc, threshold, target = "成为恋人", STAGE_THRESHOLDS["恋爱"], "恋爱"
-        # 判断是否在表白/求婚（无论好感度是否达标）
         if not await self._check_application(user_id, user_text, desc):
             return None
-        # 是申请但好感度不足 → 委婉拒绝
         if affinity < threshold:
             return "reject"
-        # 达标 → 升级
+        return target
+
+    def _apply_upgrade(self, user_id: str, target: str) -> None:
+        """阶段4：申请命中升级，修改关系状态。"""
         today = datetime.now().strftime("%Y-%m-%d")
         if target == "恋爱":
+            rel = self.memory.get_relationship(user_id)
             self.memory.set_stage(user_id, "恋爱")
-            self.memory.update_affinity(user_id, 80 - affinity)  # 拉到 80 热恋期
+            self.memory.update_affinity(user_id, 80 - rel["affinity"])  # 拉到 80 热恋期
             self.memory.set_milestone(user_id, "love_date", today)
             logger.info("❤️ 关系升级：喜欢 → 恋爱（好感度 80）")
-        else:
+        elif target == "结婚":
             self.memory.set_stage(user_id, "结婚")
             self.memory.set_milestone(user_id, "marriage_date", today)
             logger.info("💍 关系升级：恋爱 → 结婚")
-        return target
 
     async def regenerate_after_upgrade(self, user_id: str, user_text: str, upgraded_to: str) -> tuple[str, str] | None:
         """申请升级后，用「特殊时刻」语气重新生成回复（含自检）。"""
@@ -499,21 +526,26 @@ class PlanaPipeline:
                 self.memory.add_topic(user_id, "plana_emotion", f"普拉娜{cn}{ctx}", importance=3)
 
     def _expire_topics(self, user_id: str, days: int = 3) -> None:
-        """过期未消失的话题处理：情绪类话题消失时好感度 -6。"""
+        """过期未关闭的挂起话题直接关闭（无好感度副作用；吃醋切走即结算）。"""
         for t in self.memory.expire_open_topics(user_id, days=days):
-            if t["type"] == "plana_emotion":
-                self.memory.update_affinity(user_id, -6)
-                logger.info("特殊情绪「%s」过期消失，好感度 -6", t["content"])
+            logger.info("挂起话题已过期关闭：%s", t["content"])
 
-    async def _topic_decision(self, user_id: str, user_text: str, display_text: str) -> dict:
-        """判断话题状态：finished（结束）/ continuing（继续）/ switched（老师切话题）。"""
+    async def _judge_topic(self, user_id: str, user_text: str) -> dict:
+        """①判断：一次 LLM 输出 {has_content, same, topic, old_context}。"""
+        cur = self.memory.get_current_topic(user_id)
+        if not cur["topic"]:
+            # 首次对话，无当前话题：视为新话题，直接进入
+            return {"has_content": True, "same": True, "topic": user_text[:40], "old_context": ""}
+
         prompt = (
-            "根据下面这轮对话，判断普拉娜刚回复完的这个话题的状态：\n"
-            "- finished：话题已经自然聊完、收尾了\n"
-            "- continuing：话题明显还没结束，老师还想继续聊它，普拉娜适合主动续一句\n"
-            "- switched：老师刚刚转向了新话题，之前的话题没聊完就被放下\n\n"
-            f"老师：{user_text}\n普拉娜：{display_text}\n\n"
-            '严格只输出 JSON：{"state": "finished"|"continuing"|"switched", "topic": "之前话题的简短描述"}'
+            "请判断老师这句话，输出四个字段：\n"
+            "1. has_content：这句话是否有实际指向（「嗯嗯」「哦」「这样啊」等无营养内容 → false）\n"
+            "2. same：这句话和「当前话题」是否同一个话题\n"
+            "3. topic：这句话的一句话话题描述\n"
+            "4. old_context：仅当 same=false 时，之前那个话题的简短描述 + 未完成部分\n\n"
+            f"当前话题：{cur['topic']}（类型：{cur['kind']}）\n"
+            f"老师这句话：{user_text}\n\n"
+            '严格只输出 JSON：{"has_content": true|false, "same": true|false, "topic": "...", "old_context": "..."}'
         )
         messages = [
             {"role": "system", "content": self._system_prompt(user_id)},
@@ -522,16 +554,48 @@ class PlanaPipeline:
         raw = await self._chat_with_fallback(messages)
         m = re.search(r"\{.*\}", raw, re.S)
         if not m:
-            return {"state": "finished", "topic": ""}
+            return {"has_content": True, "same": True, "topic": user_text[:40], "old_context": ""}
         try:
             data = json.loads(m.group(0))
         except Exception:
-            return {"state": "finished", "topic": ""}
+            return {"has_content": True, "same": True, "topic": user_text[:40], "old_context": ""}
+        result = {
+            "has_content": bool(data.get("has_content", True)),
+            "same": bool(data.get("same", True)),
+            "topic": str(data.get("topic", user_text[:40])),
+            "old_context": str(data.get("old_context", "")),
+        }
+        logger.info("话题判断：has_content=%s same=%s topic=%s", result["has_content"], result["same"], result["topic"])
+        return result
+
+    async def _topic_decision(self, user_id: str, user_text: str, display_text: str) -> str:
+        """判断话题是否结束：finished / continuing（二态，切话题由①前置判断处理）。"""
+        cur = self.memory.get_current_topic(user_id)
+        prompt = (
+            "根据下面这轮对话，判断普拉娜刚回复完的这个话题是否已经结束：\n"
+            "- finished：话题已经自然聊完、收尾了\n"
+            "- continuing：话题明显还没结束，老师还想继续聊它，普拉娜适合主动续一句\n\n"
+            f"当前话题：{cur['topic'] or '（无）'}\n"
+            f"老师：{user_text}\n普拉娜：{display_text}\n\n"
+            '严格只输出 JSON：{"state": "finished"|"continuing"}'
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return "finished"
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return "finished"
         state = data.get("state", "finished")
-        if state not in ("finished", "continuing", "switched"):
+        if state not in ("finished", "continuing"):
             state = "finished"
-        logger.info("话题判定：%s（topic=%s）", state, data.get("topic", ""))
-        return {"state": state, "topic": data.get("topic", "")}
+        logger.info("话题判定：%s", state)
+        return state
 
     async def _topic_continuation(self, user_id: str, topic: str, user_text: str, display_text: str) -> str | None:
         """生成一句自然的话题续接（带上文，避免与主回复重复或时态错乱）。"""
@@ -629,36 +693,21 @@ class PlanaPipeline:
         return text or None
 
     async def _resume_pending_topic(self, user_id: str) -> str | None:
-        """话题 finished 后，尝试拾起一条挂起事件（吃醋优先，其次未完成话题）。
-
-        吃醋事件拾起后进入「对话中」，等对话 finish 时结算安抚；未完成话题拾起即关闭。
-        返回要发送的文案，None 表示静默。
-        """
+        """话题 finished 后，按三层优先级拾起挂起话题；拾起后成为 current_topic。"""
         if not await self._can_chat(user_id):
             return None
-
-        # 1. 优先拾起吃醋/黑化事件（高优先级）
-        for e in self.memory.get_open_topics(user_id, type_="plana_emotion", limit=1):
-            state = await self._topic_suitability(user_id, e["content"], e.get("created_at", ""))
-            if state == "suitable":
-                text = await self._resume_emotion_text(user_id, e["content"])
-                if text:
-                    self.memory.mark_topic_in_progress(e["id"])  # 进入对话中，等 finish 结算
-                    logger.info("拾起吃醋事件：%s", e["content"])
-                    return text
-            elif state == "stale":
-                self.memory.close_topic(e["id"])
-                logger.info("吃醋事件已过时，关闭：%s", e["content"])
-            # not_now → 保留
-
-        # 2. 再拾起未完成话题
-        for t in self.memory.get_open_topics(user_id, type_="user_topic", limit=3):
+        fresh_hours = self.cfg.memory.get("topic_fresh_hours", 1)
+        for t in self.memory.get_open_topics(user_id, limit=3, fresh_hours=fresh_hours):
             state = await self._topic_suitability(user_id, t["content"], t.get("created_at", ""))
             if state == "suitable":
-                text = await self._resume_topic_text(user_id, t["content"])
-                self.memory.close_topic(t["id"])  # 无论是否生成成功都关闭，避免反复尝试
+                is_emotion = t["type"] == "plana_emotion"
+                text = await self._resume_emotion_text(user_id, t["content"]) if is_emotion \
+                    else await self._resume_topic_text(user_id, t["content"])
                 if text:
-                    logger.info("拾起挂起话题：%s", t["content"])
+                    kind = "emotion" if is_emotion else "normal"
+                    self.memory.set_current_topic(user_id, t["content"], kind)
+                    self.memory.close_topic(t["id"])
+                    logger.info("拾起%s：%s", "吃醋事件" if is_emotion else "挂起话题", t["content"])
                     return text
             elif state == "stale":
                 self.memory.close_topic(t["id"])
@@ -708,18 +757,13 @@ class PlanaPipeline:
             return False
         return bool(data.get("soothed"))
 
-    async def _settle_emotion(self, user_id: str) -> bool:
-        """结算「对话中」的吃醋事件：安抚成功 +2、失败 -10，无论成败移除。返回是否发生了结算。"""
-        emotions = self.memory.get_in_progress_emotions(user_id, limit=1)
-        if not emotions:
-            return False
-        e = emotions[0]
-        success = await self._judge_soothing(user_id, e["content"])
+    async def _settle_emotion(self, user_id: str, emotion_content: str) -> int:
+        """结算吃醋事件（老师切走吃醋话题时触发）：安抚成功 +2、失败 -10。返回 delta。"""
+        success = await self._judge_soothing(user_id, emotion_content)
         delta = 2 if success else -10
         self.memory.update_affinity(user_id, delta)
-        self.memory.close_topic(e["id"])
-        logger.info("吃醋事件结算：%s（%s，好感 %+d）", e["content"], "安抚成功" if success else "安抚失败", delta)
-        return True
+        logger.info("吃醋事件结算：%s（%s，好感 %+d）", emotion_content, "安抚成功" if success else "安抚失败", delta)
+        return delta
 
     async def _detect_reminder(self, user_id: str, user_text: str) -> str | None:
         """判断老师这句话是否触发「稍后重新提醒」（要加班/要贪睡等）。"""

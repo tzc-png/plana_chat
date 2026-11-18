@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import random
-import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -32,6 +32,7 @@ class TelegramBot:
         self._greeted: dict[str, str] = {}  # {时间: 上次问候日期}，避免重复问候
         self._state_file = Path(__file__).resolve().parent.parent / "data" / "state.json"
         self.mode = self._load_mode()
+        self.fifo: deque[tuple[int, str, str]] = deque()  # (chat_id, user_id, text)
 
     def _client(self) -> httpx.AsyncClient:
         kwargs: dict = {"timeout": 60, "trust_env": False}
@@ -39,14 +40,32 @@ class TelegramBot:
             kwargs["proxy"] = self.proxy
         return httpx.AsyncClient(**kwargs)
 
-    async def get_updates(self) -> list[dict]:
+    async def _fetch_updates(self, timeout: int = 30) -> None:
+        """拉取 updates 并按序 push 进 FIFO（确认 offset；timeout=0 用于短轮询）。"""
         async with self._client() as client:
             resp = await client.get(
                 f"{self.api}/getUpdates",
-                params={"offset": self.offset, "timeout": 30},
+                params={"offset": self.offset, "timeout": timeout},
             )
             resp.raise_for_status()
-            return resp.json().get("result", [])
+            updates = resp.json().get("result", [])
+        if updates:
+            self.offset = max(u["update_id"] for u in updates) + 1
+        for upd in updates:
+            msg = upd.get("message")
+            if not msg or "text" not in msg:
+                continue
+            chat_id = msg["chat"]["id"]
+            user_id = str(msg.get("from", {}).get("id", chat_id))
+            text = msg["text"].strip()
+            if not text:
+                continue
+            if not self._is_allowed(user_id):
+                logger.warning(
+                    "\033[31m[拦截] 非白名单用户访问已忽略（user=%s）\033[0m", user_id
+                )
+                continue
+            self.fifo.append((chat_id, user_id, text))
 
     async def send_chat_action(self, chat_id: int, action: str) -> None:
         async with self._client() as client:
@@ -143,47 +162,6 @@ class TelegramBot:
             return True
         return user_id in {str(u) for u in allow}
 
-    async def _drain_recent_user_messages(self, user_id: str, within_seconds: int = 15) -> list[str]:
-        """发送前检查：消费该用户最近 N 秒内新发来的消息（用于合并重答）。"""
-        now = time.time()
-        async with self._client() as client:
-            resp = await client.get(
-                f"{self.api}/getUpdates",
-                params={"offset": self.offset, "timeout": 0},
-            )
-            resp.raise_for_status()
-            updates = resp.json().get("result", [])
-        texts = []
-        for upd in updates:
-            self.offset = max(self.offset, upd["update_id"] + 1)
-            msg = upd.get("message")
-            if not msg or "text" not in msg:
-                continue
-            muser = str(msg.get("from", {}).get("id", msg.get("chat", {}).get("id")))
-            if muser != user_id or now - msg.get("date", 0) > within_seconds:
-                continue
-            texts.append(msg["text"].strip())
-        return texts
-
-    async def _peek_recent_user_messages(self, user_id: str, within_seconds: int = 15) -> bool:
-        """检查（不消费）该用户最近 N 秒内是否有新消息。"""
-        now = time.time()
-        async with self._client() as client:
-            resp = await client.get(
-                f"{self.api}/getUpdates",
-                params={"offset": self.offset, "timeout": 0},
-            )
-            resp.raise_for_status()
-            updates = resp.json().get("result", [])
-        for upd in updates:
-            msg = upd.get("message")
-            if not msg or "text" not in msg:
-                continue
-            muser = str(msg.get("from", {}).get("id", msg.get("chat", {}).get("id")))
-            if muser == user_id and now - msg.get("date", 0) <= within_seconds:
-                return True
-        return False
-
     async def _state_watcher(self) -> None:
         """每 30 秒刷新模式状态，让 plana quiet/active/default（CLI）也能即时生效。"""
         while True:
@@ -235,63 +213,76 @@ class TelegramBot:
         if self._handle_command(chat_id, text):
             return
 
-        # 老师发消息 → 取消之前挂起的提醒任务
+        # 阶段0：老师消息立即落库 + 取消提醒
         self.pipeline.memory.cancel_reminders(user_id)
+        await self.pipeline.store_user(user_id, text)
+
+        # 阶段1：①判断（无营养静默；切话题处理旧话题）
+        judge = await self.pipeline._judge_topic(user_id, text)
+        if not judge["has_content"]:
+            logger.info("无营养消息，静默跳过：%s", text)
+            return
+        if not judge["same"]:
+            cur = self.pipeline.memory.get_current_topic(user_id)
+            if cur["kind"] == "emotion":
+                await self.pipeline._settle_emotion(user_id, cur["topic"])
+            elif cur["topic"]:
+                self.pipeline._hang_topic(user_id, cur["topic"], judge.get("old_context", ""))
+            self.pipeline._settle_topic_affinity(user_id)  # 旧话题好感度结算
+        self.pipeline.memory.set_current_topic(user_id, judge["topic"], "normal")
 
         await self.send_chat_action(chat_id, "typing")
 
-        # 1. 生成回复（暂不存储）
-        display_text, emotion = await self.pipeline.generate(user_id, text)
+        # 阶段2+3：生成回复，发送前查 FIFO（同话题合并重生成 / 不同话题放弃）
+        pending = [text]
+        upgraded = None
+        while True:
+            combined = "（老师此前说、尚未回复）\n" + "\n".join(pending) if len(pending) > 1 else pending[0]
 
-        # 2. 发送前短暂等待，让用户可能正在输入的消息到达
-        settle = self.cfg.behavior.get("settle_delay", 1.5)
-        if settle:
-            await asyncio.sleep(settle)
-
-        # 3. 发送前检查是否有新消息（用户连续发消息时合并重答）
-        new_texts = await self._drain_recent_user_messages(user_id)
-        if new_texts:
-            combined = text + "\n" + "\n".join(new_texts)
-            logger.info("[老师] 合并新消息：%s", " | ".join(new_texts))
+            # 阶段2：生成回复（纯生成 + 自检 + 申请判断 + 重生成）
             display_text, emotion = await self.pipeline.generate(user_id, combined)
-            text = combined
-
-        # 4. 回复自检（检查矛盾/不合时宜，有问题则修正）
-        if self.cfg.behavior.get("self_review", True):
+            if self.cfg.behavior.get("self_review", True):
+                try:
+                    display_text, emotion = await self.pipeline.self_review(user_id, combined, display_text, emotion)
+                except Exception:
+                    logger.warning("回复自检失败，保留原文", exc_info=True)
             try:
-                display_text, emotion = await self.pipeline.self_review(
-                    user_id, text, display_text, emotion
-                )
+                rel = self.pipeline.memory.get_relationship(user_id)
+                emotion = await self.pipeline._emotion_review(user_id, rel["stage"], display_text, emotion)
             except Exception:
-                logger.warning("回复自检失败，保留原文", exc_info=True)
+                logger.warning("情感自检失败，保留原情感", exc_info=True)
+            try:
+                upgraded = await self.pipeline._handle_application(user_id, combined)
+                if upgraded:
+                    result = await self.pipeline.regenerate_after_upgrade(user_id, combined, upgraded)
+                    if result:
+                        display_text, emotion = result
+            except Exception:
+                logger.warning("关系申请判断失败", exc_info=True)
 
-        # 4.5 情感自检（独立：情感标签是否符合当前关系阶段）
-        try:
-            rel_before = self.pipeline.memory.get_relationship(user_id)
-            emotion = await self.pipeline._emotion_review(
-                user_id, rel_before["stage"], display_text, emotion
-            )
-        except Exception:
-            logger.warning("情感自检失败，保留原情感", exc_info=True)
+            # 阶段3：发送前检查 FIFO（短轮询拉新消息）
+            await self._fetch_updates(0)
+            if not self.fifo or self.fifo[0][1] != user_id:
+                break  # 无新消息，或非本用户
+            nchat, nuser, ntext = self.fifo[0]  # peek 队头
+            njudge = await self.pipeline._judge_topic(user_id, ntext)
+            if not njudge["has_content"]:
+                break  # 无营养 → 忽略（留在 FIFO），发送当前回复
+            if not njudge["same"]:
+                logger.info("发送前发现新话题，放弃当前回复：%s", ntext)
+                return  # 不同话题 → 放弃，回主循环处理新消息
+            # 同话题 → 合并
+            self.fifo.popleft()
+            await self.pipeline.store_user(user_id, ntext)
+            pending.append(ntext)
+            logger.info("合并同话题新消息：%s", ntext)
 
-        # 4.6 更新好感度与阶段；特殊情绪挂起
-        self.pipeline._update_relationship(user_id, emotion)
+        # 阶段4：状态修改（确认发送后）
+        self.pipeline._accumulate_emotion(user_id, emotion)
         self.pipeline._handle_special_emotion(user_id, emotion, text)
-
-        # 4.7 关系升级申请检测（喜欢→恋爱 / 恋爱→结婚）
-        try:
-            upgraded = await self.pipeline._handle_application(user_id, text)
-            if upgraded:
-                result = await self.pipeline.regenerate_after_upgrade(user_id, text, upgraded)
-                if result:
-                    display_text, emotion = result
-        except Exception:
-            logger.warning("关系申请判断失败", exc_info=True)
-
-        # 4.8 话题过期处理（特殊情绪 3 天未消失则消失并 -6）
+        if upgraded in ("恋爱", "结婚"):
+            self.pipeline._apply_upgrade(user_id, upgraded)
         self.pipeline._expire_topics(user_id)
-
-        # 4.9 检测是否需要稍后重新提醒（要加班/要贪睡等）
         try:
             remind = await self.pipeline._detect_reminder(user_id, text)
             if remind:
@@ -300,11 +291,9 @@ class TelegramBot:
         except Exception:
             logger.warning("提醒检测失败", exc_info=True)
 
-        # 5. 生成语音 + 存储
+        # 阶段5：语音 + 存储 + 发送
         voice_wav = await self.pipeline.make_voice(display_text)
-        await self.pipeline.store(user_id, text, display_text, emotion)
-
-        # 6. 发送
+        await self.pipeline.store_assistant(user_id, display_text, emotion)
         mode = self.cfg.reply.mode
         if mode in ("text_voice", "text"):
             await self.send_text(chat_id, display_text)
@@ -316,51 +305,57 @@ class TelegramBot:
                 logger.exception("发送语音失败")
         await self._maybe_send_emotion(chat_id, emotion)
 
-        # 话题续接：判断话题是否结束，续接/挂起/收尾（quiet 不触发）
+        # 阶段6：续接判断
         if self.cfg.behavior.get("follow_up", True) and self.mode != "quiet":
             try:
                 await asyncio.sleep(self.cfg.behavior.get("follow_up_delay", 4))
-                if await self._peek_recent_user_messages(user_id):
-                    logger.info("跳过续接：等待期间有新消息")
+                await self._fetch_updates(0)
+                if self.fifo:
+                    logger.info("跳过续接：有新消息")
                 else:
                     await self._topic_follow_up(chat_id, user_id, text, display_text)
             except Exception:
                 logger.exception("话题续接失败")
 
     async def _topic_follow_up(self, chat_id: int, user_id: str, text: str, display_text: str) -> None:
-        """话题续接：判断话题状态，续接/挂起/收尾。"""
-        # 有挂起的提醒时，不主动续话题（等待提醒期间保持安静）
+        """话题续接：二态判断 finished / continuing，续接或结算+拾起。"""
         if self.pipeline.memory.has_pending_reminder(user_id):
             return
         if self.mode == "active":
-            decision = {"state": "continuing", "topic": text}
+            state = "continuing"
         else:
-            decision = await self.pipeline._topic_decision(user_id, text, display_text)
+            state = await self.pipeline._topic_decision(user_id, text, display_text)
 
-        if decision["state"] == "continuing":
-            cont = await self.pipeline._topic_continuation(user_id, decision["topic"] or text, text, display_text)
+        if state == "continuing":
+            cur_topic = self.pipeline.memory.get_current_topic(user_id)["topic"]
+            cont = await self.pipeline._topic_continuation(user_id, cur_topic or text, text, display_text)
             if cont:
                 try:
                     cont, _ = await self.pipeline.self_review(user_id, text, cont, "neutral")
                 except Exception:
                     pass
+                await self._fetch_updates(0)
+                if self.fifo:
+                    logger.info("跳过续接：有新消息")
+                    return
                 await self.send_text(chat_id, cont)
                 await self.pipeline.store_assistant(user_id, cont)
-        elif decision["state"] == "switched" and decision["topic"]:
-            self.pipeline.memory.add_topic(user_id, "user_topic", decision["topic"], importance=1)
-        elif decision["state"] == "finished":
-            # 先结算「对话中」的吃醋事件（安抚成功 +2 / 失败 -10，静默）
-            settled = await self.pipeline._settle_emotion(user_id)
-            if not settled:
-                # 无在聊的吃醋事件：若老师方便，尝试拾起一条挂起事件
-                resume = await self.pipeline._resume_pending_topic(user_id)
-                if resume:
-                    try:
-                        resume, _ = await self.pipeline.self_review(user_id, text, resume, "neutral")
-                    except Exception:
-                        pass
-                    await self.send_text(chat_id, resume)
-                    await self.pipeline.store_assistant(user_id, resume)
+        else:  # finished
+            # 结算当前话题好感度
+            self.pipeline._settle_topic_affinity(user_id)
+            # 拾起挂起话题
+            resume = await self.pipeline._resume_pending_topic(user_id)
+            if resume:
+                try:
+                    resume, _ = await self.pipeline.self_review(user_id, text, resume, "neutral")
+                except Exception:
+                    pass
+                await self._fetch_updates(0)
+                if self.fifo:
+                    logger.info("跳过拾起：有新消息")
+                    return
+                await self.send_text(chat_id, resume)
+                await self.pipeline.store_assistant(user_id, resume)
 
     async def _reminder_loop(self) -> None:
         """每 60 秒检查一次是否有到期的提醒任务。"""
@@ -395,45 +390,14 @@ class TelegramBot:
             logger.info("主动问候已启用：%s", self.cfg.greeting.times)
         while True:
             try:
-                updates = await self.get_updates()
-                # 一次性确认整个批次，避免发送前 drain 重复拉取
-                if updates:
-                    self.offset = max(u["update_id"] for u in updates) + 1
-                i = 0
-                n = len(updates)
-                while i < n:
-                    upd = updates[i]
-                    msg = upd.get("message")
-                    i += 1
-                    if not msg or "text" not in msg:
-                        continue
-                    chat_id = msg["chat"]["id"]
-                    user_id = str(msg.get("from", {}).get("id", chat_id))
-                    text = msg["text"].strip()
-                    if not text:
-                        continue
-                    if not self._is_allowed(user_id):
-                        logger.warning(
-                            "\033[31m[拦截] 非白名单用户访问已忽略（user=%s）\033[0m", user_id
-                        )
-                        continue
-                    # 合并同一用户短时间内（60 秒内）的连续消息，一并回复
-                    parts = [text]
-                    ts = msg.get("date", 0)
-                    while i < n:
-                        nmsg = updates[i].get("message")
-                        if not (nmsg and "text" in nmsg):
-                            break
-                        nuser = str(nmsg.get("from", {}).get("id", nmsg.get("chat", {}).get("id")))
-                        if nuser == user_id and 0 <= abs(nmsg.get("date", 0) - ts) <= 60:
-                            parts.append(nmsg["text"].strip())
-                            i += 1
-                        else:
-                            break
-                    combined = "\n".join(p for p in parts if p)
-                    logger.info("[老师] chat=%s: %s", chat_id, combined)
+                # 长轮询拉取 → push FIFO
+                await self._fetch_updates(30)
+                # 逐条处理 FIFO
+                while self.fifo:
+                    chat_id, user_id, text = self.fifo.popleft()
+                    logger.info("[老师] chat=%s: %s", chat_id, text)
                     try:
-                        await self.handle_text(chat_id, user_id, combined)
+                        await self.handle_text(chat_id, user_id, text)
                     except Exception:
                         logger.exception("处理消息失败 chat=%s", chat_id)
                         try:
