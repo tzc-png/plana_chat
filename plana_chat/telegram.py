@@ -423,8 +423,12 @@ class TelegramBot:
                             await self.send_text(chat_id, "老师……好像出了点问题，请稍后再试。")
                         except Exception:
                             pass
-            except Exception:
-                logger.exception("长轮询出错，5 秒后重试")
+            except Exception as e:
+                if isinstance(e, httpx.RequestError):
+                    # 网络/请求层错误（代理断连等）只记一行，避免 traceback 刷屏
+                    logger.warning("长轮询出错（%s），5 秒后重试", type(e).__name__)
+                else:
+                    logger.exception("长轮询出错，5 秒后重试")
                 await asyncio.sleep(5)
 
 
