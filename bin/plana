@@ -93,10 +93,11 @@ case "${1:-}" in
     fi
     mkdir -p "$DATA_DIR"
     cd "$PLANA_ROOT" || exit 1
-    echo "已切换到 uptodate 前台模式（Ctrl+C 停止，日志直接输出到本终端）……"
+    echo "已切换到 uptodate 前台模式（Ctrl+C 停止，日志同时输出到终端与 data/plana.log）……"
     echo $$ > "$PID_FILE"
     trap 'rm -f "$PID_FILE"; exit 0' INT TERM
-    PLANA_VERBOSE=1 "$VENV_PY" "$RUNNER"
+    # 前台运行，日志 tee：既实时显示在终端，也追加记录到日志文件（和后台一致）
+    PLANA_VERBOSE=1 "$VENV_PY" "$RUNNER" 2>&1 | tee -a "$LOG_FILE"
     rm -f "$PID_FILE"
     ;;
 
