@@ -168,7 +168,7 @@ bash scripts/setup.sh      # 把 bin/ 加入 PATH（写入 ~/.bashrc）
 source ~/.bashrc           # 或重开终端
 
 plana on                   # 后台启动机器人
-plana uptodate             # 前台运行，实时打印对话/请求/分支决策（调试用，Ctrl+C 停止）
+plana trace               # 观察后台日志（非侵入：Ctrl+C 只停跟随，不停后台）
 plana status               # 查看运行状态
 plana off                  # 停止并释放语音引擎
 plana quiet                # 切换 quiet 模式（免打扰）

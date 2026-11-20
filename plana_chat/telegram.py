@@ -433,7 +433,7 @@ class TelegramBot:
 
 
 async def main() -> None:
-    # 默认 INFO；PLANA_VERBOSE=1（plana uptodate）时只把 plana_chat 提到 DEBUG
+    # 默认 INFO；PLANA_VERBOSE=1（plana trace）时只把 plana_chat 提到 DEBUG
     verbose = os.environ.get("PLANA_VERBOSE") == "1"
     logging.basicConfig(
         level=logging.INFO,

@@ -43,7 +43,7 @@ stop_bg() {
 usage() {
     cat <<'EOF'
   on          后台启动机器人（非 systemd 模式，日志见 data/plana.log）
-  uptodate    前台运行并实时打印对话/请求/分支决策（Ctrl+C 停止）
+  trace       观察后台日志（非侵入：Ctrl+C 只停跟随，不停后台）
   off         停止机器人并释放语音引擎
   quiet       切换为 quiet 模式（免打扰，关闭主动问候/追问）
   active      切换为 active 模式（总是追问）
@@ -82,23 +82,25 @@ case "${1:-}" in
     fi
     ;;
 
-  uptodate)
-    if systemd_active; then
-      echo "错误：systemd 服务正在运行，请先执行 plana system_off" >&2
-      exit 1
-    fi
-    if is_running; then
-      echo "错误：后台实例正在运行（PID $(cat "$PID_FILE")），请先执行 plana off" >&2
-      exit 1
-    fi
+  trace)
+    # 观察模式：确保有后台实例在跑（详细日志），然后 tail -f 窥视，Ctrl+C 只停跟随不停后台
     mkdir -p "$DATA_DIR"
     cd "$PLANA_ROOT" || exit 1
-    echo "已切换到 uptodate 前台模式（Ctrl+C 停止，日志同时输出到终端与 data/plana.log）……"
-    echo $$ > "$PID_FILE"
-    trap 'rm -f "$PID_FILE"; exit 0' INT TERM
-    # 前台运行，日志 tee：既实时显示在终端，也追加记录到日志文件（和后台一致）
-    PLANA_VERBOSE=1 "$VENV_PY" "$RUNNER" 2>&1 | tee -a "$LOG_FILE"
-    rm -f "$PID_FILE"
+    if systemd_active; then
+      echo "systemd 服务正在运行，跟随其日志（Ctrl+C 只停止跟随）……"
+      journalctl -f -u "$SERVICE" --no-pager
+    else
+      if ! is_running; then
+        echo "后台无实例，先以详细日志启动一个……"
+        PLANA_VERBOSE=1 setsid "$VENV_PY" "$RUNNER" >> "$LOG_FILE" 2>&1 < /dev/null &
+        echo $! > "$PID_FILE"
+        sleep 1
+      else
+        echo "后台实例已在运行，跟随日志……"
+      fi
+      echo "（Ctrl+C 只停止跟随，后台继续运行）"
+      tail -f "$LOG_FILE"
+    fi
     ;;
 
   off)
