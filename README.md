@@ -314,7 +314,7 @@ while FIFO 非空:
 | 第 3 层 | 超过 N 小时的普通话题 | 时间倒序 |
 
 拾起时逐条判断三态 `suitable / stale / not_now`（一次 LLM 每条，最多 3 条）：
-- `suitable` → 生成提起文案 → 成为 current_topic → 关闭该话题（普通话题的 current_topic 记为提起文案本身，而非旧话题内容，避免老师回应提起文案时被误判成切话题）
+- `suitable` → 生成提起文案 → 成为 current_topic → 关闭该话题（普通话题的 current_topic 记为「提起文案 + 原话题」，兼顾回应提起文案或回应原话题；抽取原始话题作根，避免多层「原话题」嵌套）
 - `stale` → 关闭（已过时）
 - `not_now` → 保留（氛围不对，等下次）
 

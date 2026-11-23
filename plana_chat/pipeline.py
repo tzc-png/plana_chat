@@ -486,6 +486,21 @@ class PlanaPipeline:
         logger.info("话题好感度结算：平均 %.2f → %+d，好感 %d", avg, delta, new_affinity)
         return self.memory.get_relationship(user_id)
 
+    @staticmethod
+    def _root_topic(content: str) -> str:
+        """从挂起话题内容抽出最原始的话题，去掉「未完成」「原话题」标注，避免多层嵌套。"""
+        s = content.strip()
+        idx = s.find("（未完成：")
+        if idx != -1:
+            s = s[:idx].strip()
+        idx = s.find("（原话题：")
+        if idx != -1:
+            s = s[idx + len("（原话题："):]
+            if s.endswith("）"):
+                s = s[:-1]
+            s = s.strip()
+        return s
+
     def _hang_topic(self, user_id: str, topic: str, context: str = "") -> None:
         """切话题时，把旧话题挂起（含未完成上下文）。已自然收束的话题不再挂起。"""
         ctx = (context or "").strip()
@@ -809,8 +824,12 @@ class PlanaPipeline:
                     else await self._resume_topic_text(user_id, t["content"])
                 if text:
                     kind = "emotion" if is_emotion else "normal"
-                    # 普通话题：current_topic 记拾起文案（而非旧话题内容），否则老师回应拾起文案时会被误判为切话题
-                    topic = t["content"] if is_emotion else clean_for_tts(text)
+                    if is_emotion:
+                        topic = t["content"]
+                    else:
+                        # 普通话题：提起文案 + 原话题，兼顾「回应提起文案」与「回应原话题」；抽根避免多层「原话题」
+                        root = self._root_topic(t["content"])
+                        topic = f"{clean_for_tts(text)}（原话题：{root}）"
                     self.memory.set_current_topic(user_id, topic, kind)
                     self.memory.close_topic(t["id"])
                     logger.info("拾起%s：%s", "吃醋事件" if is_emotion else "挂起话题", t["content"])
