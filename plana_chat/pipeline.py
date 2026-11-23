@@ -456,8 +456,12 @@ class PlanaPipeline:
         return self.memory.get_relationship(user_id)
 
     def _hang_topic(self, user_id: str, topic: str, context: str = "") -> None:
-        """切话题时，把旧话题挂起（含未完成上下文）。"""
-        content = topic + (f"（未完成：{context}）" if context else "")
+        """切话题时，把旧话题挂起（含未完成上下文）。已自然收束的话题不再挂起。"""
+        ctx = (context or "").strip()
+        if not ctx or "无未完成" in ctx or "已收束" in ctx:
+            logger.info("话题已收束，不挂起：%s", topic)
+            return
+        content = topic + f"（未完成：{ctx}）"
         self.memory.add_topic(user_id, "user_topic", content, importance=1)
         logger.info("挂起话题：%s", content)
 
@@ -608,8 +612,8 @@ class PlanaPipeline:
             "请判断老师这句话，输出四个字段：\n"
             "1. has_content：这句话是否有实际指向（「嗯嗯」「哦」「这样啊」等无营养内容 → false）\n"
             "2. same：这句话和「当前话题」是否同一个话题\n"
-            "3. topic：这句话的一句话话题描述\n"
-            "4. old_context：仅当 same=false 时，之前那个话题的简短描述 + 未完成部分\n\n"
+            "3. topic：当前话题的一句话总结，必须涵盖起因、经过、结果（衔接「当前话题」里的前提与这条新消息，别只写最新一句）\n"
+            "4. old_context：仅当 same=false 时，之前那个话题的起因经过结果 + 未完成部分；若该话题已自然收束、无未完成部分，则输出空字符串\n\n"
             f"当前话题：{cur['topic']}（类型：{cur['kind']}）\n"
             f"老师这句话：{user_text}\n\n"
             f"【最近的对话】\n{context}\n\n"
