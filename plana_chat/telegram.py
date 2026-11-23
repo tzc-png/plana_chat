@@ -426,7 +426,14 @@ class TelegramBot:
                         except Exception:
                             pass
             except Exception as e:
-                if isinstance(e, httpx.RequestError):
+                if isinstance(e, httpx.HTTPStatusError):
+                    status = e.response.status_code
+                    if status == 409:
+                        # 另一个实例正在用同一 token 拉取更新，本实例重试无意义，直接退出
+                        logger.warning("检测到另一个 bot 实例正在运行（409 Conflict），本实例退出")
+                        break
+                    logger.warning("长轮询 HTTP 错误（%s），5 秒后重试", status)
+                elif isinstance(e, httpx.RequestError):
                     # 网络/请求层错误（代理断连等）只记一行，避免 traceback 刷屏
                     logger.warning("长轮询出错（%s），5 秒后重试", type(e).__name__)
                 else:
