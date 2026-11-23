@@ -162,7 +162,7 @@ class PlanaPipeline:
     async def generate(self, user_id: str, user_text: str, special_hint: str | None = None) -> tuple[str, str]:
         """生成回复（不存储）：返回 (display_text, emotion)。"""
         await self._maybe_consolidate(user_id)
-        history = self.memory.recent(user_id, self.cfg.memory.rounds)
+        history = self._drop_trailing_user(self.memory.recent(user_id, self.cfg.memory.rounds))
         user_emb = await self._embed(user_text)
         if user_emb is not None:
             self.memory.update_latest_user_embedding(user_id, user_emb)
@@ -236,7 +236,7 @@ class PlanaPipeline:
 
     async def self_review(self, user_id: str, user_text: str, display_text: str, emotion: str) -> tuple[str, str]:
         """回复自检：检查与上下文是否矛盾/不合时宜，有问题则修正。"""
-        recent = self.memory.recent(user_id, 3)
+        recent = self._drop_trailing_user(self.memory.recent(user_id, 3))
         context = self._format_msgs(recent) if recent else "（无）"
         prompt = (
             "请审查下面这条即将发送给老师的回复。只有当你发现它存在以下问题时才修改，否则原样输出：\n"
@@ -309,6 +309,14 @@ class PlanaPipeline:
             who = "老师" if m["role"] == "user" else "普拉娜"
             lines.append(f"{who}: {m['content']}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _drop_trailing_user(history: list[dict]) -> list[dict]:
+        """去掉历史末尾连续的老师消息——它们是本轮刚写入、会再单独作为当前消息传入的内容。"""
+        out = list(history)
+        while out and out[-1].get("role") == "user":
+            out.pop()
+        return out
 
     async def _summarize(self, old_msgs: list[dict], existing: str | None) -> str:
         prompt = (
@@ -589,6 +597,9 @@ class PlanaPipeline:
             return {"has_content": True, "same": True, "topic": user_text[:40], "old_context": ""}
 
         recent = self.memory.recent(user_id, 3)
+        # 阶段0已把老师这句话写入库，若它出现在历史末尾则去掉，避免与下面的「老师这句话」重复
+        if recent and recent[-1].get("role") == "user" and recent[-1].get("content") == user_text:
+            recent = recent[:-1]
         context = self._format_msgs(recent) if recent else "（无）"
         prompt = (
             "请判断老师这句话，输出四个字段：\n"
