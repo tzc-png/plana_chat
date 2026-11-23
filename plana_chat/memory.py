@@ -159,6 +159,32 @@ class MemoryStore:
             ).fetchall()
         return [{"content": r["content"], "created_at": r["created_at"]} for r in reversed(rows)]
 
+    def list_messages(self, user_id: str, limit: int = 20) -> list[dict]:
+        """最近 N 条消息（含 id，供记忆编辑器查看）。"""
+        with self._lock, closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT id, role, content, emotion, created_at FROM messages "
+                "WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        return [dict(r) for r in reversed(rows)]
+
+    def update_message(self, message_id: int, content: str) -> bool:
+        """修改一条消息原文（清空 embedding，避免与旧语义向量不一致）。返回是否命中。"""
+        with self._lock, closing(self._connect()) as conn:
+            cur = conn.execute(
+                "UPDATE messages SET content=?, embedding=NULL WHERE id=?", (content, message_id)
+            )
+            conn.commit()
+            return cur.rowcount > 0
+
+    def delete_message(self, message_id: int) -> bool:
+        """删除一条消息原文。返回是否命中。"""
+        with self._lock, closing(self._connect()) as conn:
+            cur = conn.execute("DELETE FROM messages WHERE id=?", (message_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
     def last_user_time(self, user_id: str) -> datetime | None:
         with self._lock, closing(self._connect()) as conn:
             row = conn.execute(
@@ -236,6 +262,30 @@ class MemoryStore:
             )
             conn.commit()
 
+    def edit_summary(self, user_id: str, content: str) -> None:
+        """直接改写摘要内容（保留 consolidated_upto，不触发重新整理）。"""
+        now = datetime.now().strftime(_TIME_FMT)
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                "UPDATE summaries SET content=?, updated_at=? WHERE user_id=?",
+                (content, now, user_id),
+            )
+            conn.commit()
+
+    def list_facts(self, user_id: str) -> list[dict]:
+        with self._lock, closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT id, type, content, created_at FROM facts WHERE user_id=? ORDER BY id",
+                (user_id,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def delete_fact(self, fact_id: int) -> bool:
+        with self._lock, closing(self._connect()) as conn:
+            cur = conn.execute("DELETE FROM facts WHERE id=?", (fact_id,))
+            conn.commit()
+            return cur.rowcount > 0
+
     def add_facts(self, user_id: str, items: list[str], ftype: str = "fact") -> None:
         now = datetime.now().strftime(_TIME_FMT)
         with self._lock, closing(self._connect()) as conn:
@@ -296,6 +346,17 @@ class MemoryStore:
             )
             conn.commit()
         return self.get_relationship(user_id)["affinity"]
+
+    def set_affinity(self, user_id: str, value: int) -> None:
+        """直接设置好感度绝对值（下限 0）。"""
+        value = max(0, value)
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO relationship(user_id, affinity) VALUES(?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET affinity=excluded.affinity",
+                (user_id, value),
+            )
+            conn.commit()
 
     def set_stage(self, user_id: str, stage: str) -> None:
         with self._lock, closing(self._connect()) as conn:
@@ -370,6 +431,12 @@ class MemoryStore:
             conn.execute(
                 "UPDATE current_topic SET emotions='[]' WHERE user_id=?", (user_id,)
             )
+            conn.commit()
+
+    def clear_current_topic(self, user_id: str) -> None:
+        """清空当前话题（删除记录）。"""
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute("DELETE FROM current_topic WHERE user_id=?", (user_id,))
             conn.commit()
 
     # ── 话题表 ──────────────────────────────────────────────────────────

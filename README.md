@@ -174,6 +174,7 @@ plana off                  # 停止并释放语音引擎
 plana quiet                # 切换 quiet 模式（免打扰）
 plana active               # 切换 active 模式（总是追问）
 plana default              # 切换 default 模式（追问动态决策）
+plana edit                 # 编辑记忆（需先 plana off；与 bot 互斥运行）
 plana system_on            # 设为 systemd 服务（开机自启，需 sudo）
 plana system_off           # 取消开机自启（需 sudo）
 plana help                 # 查看所有指令
@@ -393,6 +394,20 @@ while FIFO 非空:
 2. **总结压缩**：历史超阈值后，把旧消息压成「长期记忆摘要」常驻上下文；注入时带上「最近整理时间」，让模型能区分摘要里的内容是「今天」还是「以前」
 3. **事实抽取**：抽出「关于你的事实」和「未完成事项」，每次对话和主动问候时注入
 4. **语义检索**：所有原文**永久保留**并用本地 embedding（`bge-m3`）向量化；你问起过去某件事时，按语义检索出最相关的历史原文注入上下文，细节不失真
+
+### 记忆编辑（手动修正）
+
+记忆存在 `data/history.db`，可用 `plana edit` 手动查看/修改/删除：
+
+- `plana edit show` — 记忆概览（关系 / 摘要 / 事实 / 话题 / 当前话题）
+- `plana edit messages [N]` — 最近 N 条对话原文（带 id）
+- `plana edit edit-message <id> <新文本>` / `del-message <id>` — 改 / 删原文
+- `plana edit facts` / `del-fact <id>` — 列出 / 删除事实
+- `plana edit summary` / `set-summary <文本>` — 查看 / 重写摘要
+- `plana edit relationship` / `set-stage <阶段>` / `set-affinity <n>` — 关系
+- `plana edit topics` / `close-topic <id>` / `clear-current` — 话题
+
+**互斥**：编辑与 bot 不能同时进行。bot 在跑时 `plana edit` 会拒绝；编辑期间（持有 `data/edit.lock`）`plana on` 也会拒绝。修改/删除原文会连带清空其语义向量（embedding），该条不再参与语义检索，但仍留在原文历史里。
 
 ## 注意事项
 

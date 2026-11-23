@@ -6,12 +6,14 @@ import json
 import logging
 import os
 import random
+import sys
 from collections import deque
 from datetime import datetime
 from pathlib import Path
 
 import httpx
 
+from . import lock
 from .audio import wav_to_ogg_opus
 from .config import Config, env, load_config
 from .pipeline import build_pipeline
@@ -433,6 +435,10 @@ class TelegramBot:
 
 
 async def main() -> None:
+    # 启动前检查：记忆编辑器是否在运行（互斥）
+    if lock.editor_is_running():
+        print("错误：记忆编辑器正在运行，请先完成编辑再启动 bot", file=sys.stderr)
+        sys.exit(1)
     # 默认 INFO；PLANA_VERBOSE=1（plana trace）时只把 plana_chat 提到 DEBUG
     verbose = os.environ.get("PLANA_VERBOSE") == "1"
     logging.basicConfig(

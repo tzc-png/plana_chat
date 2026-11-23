@@ -48,6 +48,7 @@ usage() {
   quiet       切换为 quiet 模式（免打扰，关闭主动问候/追问）
   active      切换为 active 模式（总是追问）
   default     切换为 default 模式（追问动态决策，默认）
+  edit        编辑记忆（需先 plana off；与 bot 互斥运行）
   system_on   安装并启用 systemd 服务（开机自启，需 sudo）
   system_off  停止并禁用 systemd 服务（需 sudo）
   status      查看运行状态
@@ -64,6 +65,11 @@ case "${1:-}" in
     if is_running; then
       echo "plana 已在运行（PID $(cat "$PID_FILE")）"
       exit 0
+    fi
+    # 检查是否有记忆编辑器在跑（走 Python，可自动清理陈旧锁）
+    if "$VENV_PY" -c 'import sys; sys.path.insert(0, sys.argv[1]); from plana_chat.lock import editor_is_running; sys.exit(0 if editor_is_running() else 1)' "$PLANA_ROOT" 2>/dev/null; then
+      echo "错误：记忆编辑器正在运行，请先完成编辑" >&2
+      exit 1
     fi
     mkdir -p "$DATA_DIR"
     # 切到项目根再启动，避免相对路径（如 memory.db_path）因启动目录不同而漂移
@@ -124,6 +130,11 @@ case "${1:-}" in
     mkdir -p "$DATA_DIR"
     echo '{"mode": "default"}' > "$DATA_DIR/state.json"
     echo "plana 已切换为 default 模式（追问动态决策）"
+    ;;
+
+  edit)
+    shift
+    "$VENV_PY" "$PLANA_ROOT/scripts/edit_memory.py" "$@"
     ;;
 
   system_on)
