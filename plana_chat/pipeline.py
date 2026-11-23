@@ -98,6 +98,35 @@ SPECIAL_MOMENTS = {
 }
 
 
+# ── LLM 完整日志：独立文件 data/llm.log（不刷控制台/plana.log）────────────────
+_LLM_FULL_LOGGER = logging.getLogger("plana_chat.llm_full")
+_LLM_FULL_LOGGER.setLevel(logging.DEBUG)
+_LLM_FULL_LOGGER.propagate = False
+_llm_full_handler: logging.FileHandler | None = None
+
+
+def _ensure_llm_full_handler() -> logging.FileHandler:
+    global _llm_full_handler
+    if _llm_full_handler is None:
+        path = Path(__file__).resolve().parent.parent / "data" / "llm.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _llm_full_handler = logging.FileHandler(path, encoding="utf-8")
+        _llm_full_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        _LLM_FULL_LOGGER.addHandler(_llm_full_handler)
+    return _llm_full_handler
+
+
+def _log_full_llm(label: str, messages: list[dict], raw: str) -> None:
+    """把完整请求（全部 messages）与完整返回写入 data/llm.log。"""
+    _ensure_llm_full_handler()
+    parts = [f"===== {label} ====="]
+    for m in messages:
+        parts.append(f"[{m.get('role', '?')}] {m.get('content', '')}")
+    parts.append("----- 返回 -----")
+    parts.append(raw)
+    _LLM_FULL_LOGGER.debug("\n".join(parts))
+
+
 @dataclass
 class ProcessResult:
     display_text: str
@@ -293,6 +322,8 @@ class PlanaPipeline:
         ret = raw[:80].replace("\n", " ")
         ret += "…" if len(raw) > 80 else ""
         logger.debug("LLM 返回%s：%s", tag, ret)
+        # 完整请求/返回写入独立 data/llm.log（不刷 plana.log）
+        _log_full_llm(label, messages, raw)
         return raw
 
     @staticmethod
