@@ -185,9 +185,12 @@ class PlanaPipeline:
         messages = [{"role": "system", "content": self._system_prompt(user_id, special_hint)}]
 
         # 注入长期记忆：摘要 + 事实 + 未完成项
-        summary = self.memory.get_summary(user_id)
+        summary, summary_at = self.memory.get_summary_with_time(user_id)
         if summary:
-            messages.append({"role": "system", "content": f"【长期记忆摘要】\n{summary}"})
+            header = "【长期记忆摘要】"
+            if summary_at:
+                header += f"（最近整理于 {summary_at}）"
+            messages.append({"role": "system", "content": f"{header}\n{summary}"})
         facts = self.memory.recent_facts(user_id, "fact", limit=10)
         if facts:
             messages.append(
@@ -771,7 +774,9 @@ class PlanaPipeline:
                     else await self._resume_topic_text(user_id, t["content"])
                 if text:
                     kind = "emotion" if is_emotion else "normal"
-                    self.memory.set_current_topic(user_id, t["content"], kind)
+                    # 普通话题：current_topic 记拾起文案（而非旧话题内容），否则老师回应拾起文案时会被误判为切话题
+                    topic = t["content"] if is_emotion else clean_for_tts(text)
+                    self.memory.set_current_topic(user_id, topic, kind)
                     self.memory.close_topic(t["id"])
                     logger.info("拾起%s：%s", "吃醋事件" if is_emotion else "挂起话题", t["content"])
                     return text

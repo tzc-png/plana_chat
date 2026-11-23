@@ -217,6 +217,15 @@ class MemoryStore:
             row = conn.execute("SELECT content FROM summaries WHERE user_id=?", (user_id,)).fetchone()
         return row["content"] if row else None
 
+    def get_summary_with_time(self, user_id: str) -> tuple[str | None, str | None]:
+        with self._lock, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT content, updated_at FROM summaries WHERE user_id=?", (user_id,)
+            ).fetchone()
+        if row is None:
+            return None, None
+        return row["content"], row["updated_at"]
+
     def update_summary(self, user_id: str, content: str) -> None:
         now = datetime.now().strftime(_TIME_FMT)
         with self._lock, closing(self._connect()) as conn:
