@@ -968,9 +968,10 @@ class PlanaPipeline:
         """上下文感知的主动问候；最近有进行中对话时返回 None（跳过）。"""
         now = datetime.now()
 
-        # 最近 30 分钟内有对话（进行中）→ 跳过定时问候
+        # 最近 N 分钟内有对话（进行中）→ 跳过定时问候
+        recent_minutes = self.cfg.greeting.get("recent_minutes", 30)
         last_time = self.memory.last_message_time(user_id)
-        if last_time is not None and (now - last_time).total_seconds() < 30 * 60:
+        if last_time is not None and (now - last_time).total_seconds() < recent_minutes * 60:
             logger.info("跳过主动问候：最近有进行中对话 user=%s", user_id)
             return None
 
