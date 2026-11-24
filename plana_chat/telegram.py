@@ -296,6 +296,8 @@ class TelegramBot:
             self.fifo.popleft()
             await self.pipeline.store_user(user_id, ntext)
             pending.append(ntext)
+            # 合并分支也推进 current_topic，避免停在首条消息的裸话题
+            self.pipeline.memory.set_current_topic(user_id, njudge["topic"], "normal")
             logger.info("合并同话题新消息：%s", ntext)
 
         # 阶段4：状态修改（确认发送后）
