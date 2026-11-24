@@ -225,7 +225,11 @@ class PlanaPipeline:
             messages.append(
                 {"role": "system", "content": "【关于老师的已知信息】\n" + "\n".join(f"- {f}" for f in facts)}
             )
-        open_items = self.memory.recent_open_items(user_id, limit=5)
+        open_items = self.memory.recent_open_items(
+            user_id, limit=5,
+            short_hours=self.cfg.memory.get("open_item_short_hours", 2),
+            max_hours=self.cfg.memory.get("open_item_max_hours", 72),
+        )
         if open_items:
             messages.append(
                 {"role": "system", "content": "【老师提到但尚未完成/聊完的事（可自然带一句关心，不要生硬提醒）】\n"
@@ -364,13 +368,15 @@ class PlanaPipeline:
         raw = await self._chat_with_fallback([{"role": "user", "content": prompt}])
         return raw.strip()
 
-    async def _extract_facts(self, old_msgs: list[dict]) -> tuple[list[str], list[str]]:
+    async def _extract_facts(self, old_msgs: list[dict]) -> tuple[list[str], list[dict]]:
         prompt = (
             "请从下面这段老师和普拉娜的对话中，抽取两类信息：\n"
             "1. 「关于老师的事实」：姓名、喜好、习惯、重要个人信息等稳定事实\n"
-            "2. 「老师提到但尚未完成/未解决的事项」：待办、计划、进行中的话题等\n\n"
+            "2. 「老师提到但尚未完成/未解决的事项」：待办、计划等。每条需标注完成时长 duration：\n"
+            "   - short：短时动作（吃饭、睡觉、一次短会等，约 2 小时内完成）\n"
+            "   - long：长期或无固定完成时间的事项（写论文、做项目、待办等）\n\n"
             f"对话：\n{self._format_msgs(old_msgs)}\n\n"
-            '请严格只输出 JSON，格式：{"facts": ["..."], "open_items": ["..."]}，没有的类别输出空数组 []。'
+            '请严格只输出 JSON，格式：{"facts": ["..."], "open_items": [{"content": "...", "duration": "short|long"}]}，没有的类别输出空数组 []。'
         )
         raw = await self._chat_with_fallback([{"role": "user", "content": prompt}])
         m = re.search(r"\{.*\}", raw, re.S)
@@ -380,7 +386,19 @@ class PlanaPipeline:
             data = json.loads(m.group(0))
         except Exception:
             return [], []
-        return data.get("facts", []), data.get("open_items", [])
+        facts = data.get("facts", [])
+        open_items = []
+        for it in data.get("open_items", []):
+            if isinstance(it, str):
+                open_items.append({"content": it, "duration": "long"})
+            elif isinstance(it, dict):
+                content = it.get("content", "")
+                duration = it.get("duration", "long")
+                if duration not in ("short", "long"):
+                    duration = "long"
+                if content:
+                    open_items.append({"content": content, "duration": duration})
+        return facts, open_items
 
     async def _maybe_consolidate(self, user_id: str) -> None:
         """历史消息超阈值时：总结压缩 + 事实抽取（原文保留，不删除）。"""
@@ -394,7 +412,7 @@ class PlanaPipeline:
             self.memory.update_summary(user_id, new_summary)
             facts, open_items = await self._extract_facts(batch)
             self.memory.add_facts(user_id, facts, "fact")
-            self.memory.add_facts(user_id, open_items, "open_item")
+            self.memory.add_open_items(user_id, open_items)
             self.memory.update_consolidated_upto(user_id, batch[-1]["id"])
             logger.info(
                 "记忆整理完成 user=%s（处理 %d 条，事实 %d、未完成项 %d）",
@@ -1035,7 +1053,11 @@ class PlanaPipeline:
             elif holiday:
                 hint += f"\n\n另外，今天是「{holiday}」，请顺带一句应景的节日祝福或问候。"
 
-        open_items = self.memory.recent_open_items(user_id, limit=3)
+        open_items = self.memory.recent_open_items(
+            user_id, limit=3,
+            short_hours=self.cfg.memory.get("open_item_short_hours", 2),
+            max_hours=self.cfg.memory.get("open_item_max_hours", 72),
+        )
         if open_items:
             hint += "\n\n另外老师之前提到这些还没完成的事，可自然带一句关心（不要生硬）：" + "；".join(open_items)
 

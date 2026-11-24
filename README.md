@@ -201,6 +201,7 @@ plana help                 # 查看所有指令
 | | `compact_threshold` | 未整理消息数超该值触发「总结压缩 + 事实抽取」 |
 | | `embedding_model` / `retrieve_top_k` | 语义检索用的 embedding 模型 / 注入的历史条数 |
 | | `topic_fresh_hours` / `topic_idle_minutes` | 挂起话题「新鲜」时间窗（小时，默认 1）/ 话题静默超时（分钟，默认 60，超时自动结算） |
+| | `open_item_short_hours` / `open_item_max_hours` | 未完成事项的短时/长时完成时长（小时，默认 2 / 72） |
 | `reply` | `mode` | `text_voice`（文字+语音，默认）/ `voice` / `text` |
 | `telegram` | `token_env` / `proxy` / `allow_user_ids` | token 环境变量名 / 代理地址 / 用户白名单（空=不限制） |
 | `greeting` | `enabled` / `times` / `chat_ids` / `reminder_minutes` / `meal_duration_hours` / `recent_minutes` | 主动问候开关 / 时刻 / 目标用户 / 重新提醒间隔（分钟）/ 吃饭动作持续时间（小时，默认 2，超过则视为已吃完）/ 最近多少分钟内有对话则跳过问候（默认 30） |
@@ -396,7 +397,7 @@ while FIFO 非空:
 
 1. **滚动历史**：最近 N 轮原始对话（当前上下文）
 2. **总结压缩**：历史超阈值后，把旧消息压成「长期记忆摘要」常驻上下文；注入时带上「最近整理时间」，让模型能区分摘要里的内容是「今天」还是「以前」
-3. **事实抽取**：抽出「关于你的事实」和「未完成事项」，每次对话和主动问候时注入
+3. **事实抽取**：抽出「关于你的事实」和「未完成事项」，每次对话和主动问候时注入。未完成事项按完成时长分两类：**短时**（吃饭/睡觉等，`open_item_short_hours` 小时后视为已完成）和**长时**（写论文/待办等，`open_item_max_hours` 小时后兜底过期），到期后不再注入
 4. **语义检索**：所有原文**永久保留**并用本地 embedding（`bge-m3`）向量化；你问起过去某件事时，按语义检索出最相关的历史原文注入上下文，细节不失真
 
 ### 记忆编辑（手动修正）

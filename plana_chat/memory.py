@@ -107,6 +107,7 @@ class MemoryStore:
             self._ensure_column(conn, "messages", "embedding", "BLOB")
             self._ensure_column(conn, "summaries", "consolidated_upto", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "current_topic", "emotions", "TEXT NOT NULL DEFAULT '[]'")
+            self._ensure_column(conn, "facts", "duration", "TEXT")
             conn.commit()
 
     # ── 消息 ────────────────────────────────────────────────────────────────
@@ -296,6 +297,23 @@ class MemoryStore:
                 )
             conn.commit()
 
+    def add_open_items(self, user_id: str, items: list[dict]) -> None:
+        """存未完成事项，带 duration（short/long）。"""
+        now = datetime.now().strftime(_TIME_FMT)
+        with self._lock, closing(self._connect()) as conn:
+            for it in items:
+                content = it.get("content", "")
+                if not content:
+                    continue
+                duration = it.get("duration", "long")
+                if duration not in ("short", "long"):
+                    duration = "long"
+                conn.execute(
+                    "INSERT INTO facts(user_id, type, content, duration, created_at) VALUES(?,?,?,?,?)",
+                    (user_id, "open_item", content, duration, now),
+                )
+            conn.commit()
+
     def recent_facts(self, user_id: str, ftype: str | None = None, limit: int = 20) -> list[str]:
         with self._lock, closing(self._connect()) as conn:
             if ftype:
@@ -310,15 +328,28 @@ class MemoryStore:
                 ).fetchall()
         return [r["content"] for r in rows]
 
-    def recent_open_items(self, user_id: str, limit: int = 10, days: int = 3) -> list[str]:
-        since = (datetime.now() - timedelta(days=days)).strftime(_TIME_FMT)
+    def recent_open_items(self, user_id: str, limit: int = 10, short_hours: float = 2, max_hours: float = 72) -> list[str]:
+        """未完成事项；短时项超过 short_hours、长时项超过 max_hours 视为已完成，不再返回。"""
+        now = datetime.now()
         with self._lock, closing(self._connect()) as conn:
             rows = conn.execute(
-                "SELECT content FROM facts WHERE user_id=? AND type='open_item' AND created_at>=? "
-                "ORDER BY id DESC LIMIT ?",
-                (user_id, since, limit),
+                "SELECT content, duration, created_at FROM facts WHERE user_id=? AND type='open_item' "
+                "ORDER BY id DESC",
+                (user_id,),
             ).fetchall()
-        return [r["content"] for r in rows]
+        out = []
+        for r in rows:
+            try:
+                created = datetime.strptime(r["created_at"], _TIME_FMT)
+            except (ValueError, TypeError):
+                continue
+            expire_hours = short_hours if r["duration"] == "short" else max_hours
+            if (now - created).total_seconds() > expire_hours * 3600:
+                continue
+            out.append(r["content"])
+            if len(out) >= limit:
+                break
+        return out
 
     # ── 关系（好感度 + 阶段）────────────────────────────────────────────
     def get_relationship(self, user_id: str) -> dict:
