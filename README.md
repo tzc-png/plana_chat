@@ -424,7 +424,7 @@ while FIFO 非空:
 
 ## 致谢
 
-- 角色与设定源自《蔚蓝档案》（Blue Archive）「什亭之匣」主题
+- 角色与设定源自《蔚蓝档案》（Blue Archive）
 - 语音引擎：GPT-SoVITS
 - 普拉娜音色模型：bilibili@SLNeil
 - 中文音频特征提取：TencentGameMate/chinese-hubert-base
