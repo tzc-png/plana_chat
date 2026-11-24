@@ -18,7 +18,7 @@ from .config import Config
 from .embedding import embed_text
 from .llm import build_llm, build_local_llm
 from .llm.base import ChatLLM
-from .memory import MemoryStore
+from .memory import MemoryStore, relative_time
 from .postprocess import clean_for_tts, extract_emotion, strip_emotion_tag
 from .search import web_search
 from .translator import Translator
@@ -192,6 +192,11 @@ class PlanaPipeline:
         """生成回复（不存储）：返回 (display_text, emotion)。"""
         await self._maybe_consolidate(user_id)
         history = self._drop_trailing_user(self.memory.recent(user_id, self.cfg.memory.rounds))
+        # 给历史逐条加相对时间，便于模型区分「刚刚/几小时前/昨天」
+        history = [
+            {"role": m["role"], "content": f"（{relative_time(m.get('created_at'))}）{m['content']}" if m.get("created_at") else m["content"]}
+            for m in history
+        ]
         user_emb = await self._embed(user_text)
         if user_emb is not None:
             self.memory.update_latest_user_embedding(user_id, user_emb)
@@ -223,7 +228,8 @@ class PlanaPipeline:
         facts = self.memory.recent_facts(user_id, "fact", limit=10)
         if facts:
             messages.append(
-                {"role": "system", "content": "【关于老师的已知信息】\n" + "\n".join(f"- {f}" for f in facts)}
+                {"role": "system", "content": "【关于老师的已知信息】\n"
+                 + "\n".join(f"- {f['content']}（{relative_time(f['created_at'])}）" for f in facts)}
             )
         open_items = self.memory.recent_open_items(
             user_id, limit=5,
@@ -233,7 +239,7 @@ class PlanaPipeline:
         if open_items:
             messages.append(
                 {"role": "system", "content": "【老师提到但尚未完成/聊完的事（可自然带一句关心，不要生硬提醒）】\n"
-                 + "\n".join(f"- {o}" for o in open_items)}
+                 + "\n".join(f"- {o['content']}（{relative_time(o['created_at'])}）" for o in open_items)}
             )
 
         # 注入语义检索到的历史细节
@@ -241,7 +247,8 @@ class PlanaPipeline:
             retrieved = self._retrieve(user_id, user_emb)
             if retrieved:
                 lines = "\n".join(
-                    ("老师：" if r["role"] == "user" else "普拉娜：") + r["content"]
+                    ("老师：" if r["role"] == "user" else "普拉娜：")
+                    + f"（{relative_time(r.get('created_at'))}）" + r["content"]
                     for r in retrieved
                 )
                 messages.append(
@@ -345,7 +352,9 @@ class PlanaPipeline:
         lines = []
         for m in msgs:
             who = "老师" if m["role"] == "user" else "普拉娜"
-            lines.append(f"{who}: {m['content']}")
+            rel = relative_time(m.get("created_at"))
+            time_part = f"（{rel}）" if rel else ""
+            lines.append(f"{who}{time_part}: {m['content']}")
         return "\n".join(lines)
 
     @staticmethod
@@ -370,16 +379,19 @@ class PlanaPipeline:
         return raw.strip()
 
     async def _extract_facts(self, old_msgs: list[dict]) -> tuple[list[str], list[dict]]:
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
         prompt = (
+            f"当前时间：{now}\n"
             "请从下面这段老师和普拉娜的对话中，抽取两类信息：\n"
             "1. 「关于老师的事实」：只抽长期稳定不变的事实（姓名、称呼、喜好、习惯、性格等）；"
             "临时状态（没吃饭、困了、想回家、今天做了某事等）不要放进这里，归到第 2 类\n"
             "2. 「老师提到但尚未完成/未解决的事项」：临时状态、待办、计划等。每条需标注完成时长 duration：\n"
             "   - short：短时动作（吃饭、睡觉、一次短会等，约 2 小时内完成）\n"
             "   - long：长期或无固定完成时间的事项（写论文、做项目、待办等）\n"
+            "   - scheduled：有明确时间点的事项（周五出差、下周考试、晚上开会等），需额外给 due_hours = 从现在到该时间点的小时数（结合当前时间估算）\n"
             "注意：同一件事只能归入一类，不要既进 facts 又进 open_items。\n\n"
             f"对话：\n{self._format_msgs(old_msgs)}\n\n"
-            '请严格只输出 JSON，格式：{"facts": ["..."], "open_items": [{"content": "...", "duration": "short|long"}]}，没有的类别输出空数组 []。'
+            '请严格只输出 JSON，格式：{"facts": ["..."], "open_items": [{"content": "...", "duration": "short|long|scheduled", "due_hours": 数字或 null}]}，没有的类别输出空数组 []。'
         )
         raw = await self._chat_with_fallback([{"role": "user", "content": prompt}])
         m = re.search(r"\{.*\}", raw, re.S)
@@ -393,14 +405,14 @@ class PlanaPipeline:
         open_items = []
         for it in data.get("open_items", []):
             if isinstance(it, str):
-                open_items.append({"content": it, "duration": "long"})
+                open_items.append({"content": it, "duration": "long", "due_hours": None})
             elif isinstance(it, dict):
                 content = it.get("content", "")
                 duration = it.get("duration", "long")
-                if duration not in ("short", "long"):
+                if duration not in ("short", "long", "scheduled"):
                     duration = "long"
                 if content:
-                    open_items.append({"content": content, "duration": duration})
+                    open_items.append({"content": content, "duration": duration, "due_hours": it.get("due_hours")})
         return facts, open_items
 
     async def _maybe_consolidate(self, user_id: str) -> None:
@@ -1062,7 +1074,9 @@ class PlanaPipeline:
             max_hours=self.cfg.memory.get("open_item_max_hours", 72),
         )
         if open_items:
-            hint += "\n\n另外老师之前提到这些还没完成的事，可自然带一句关心（不要生硬）：" + "；".join(open_items)
+            hint += "\n\n另外老师之前提到这些还没完成的事，可自然带一句关心（不要生硬）：" + "；".join(
+                f"{o['content']}（{relative_time(o['created_at'])}）" for o in open_items
+            )
 
         messages = [
             {"role": "system", "content": self._system_prompt(user_id)},

@@ -68,10 +68,12 @@ def test_memory() -> None:
     ms.add("u1", "user", "你好")
     ms.add("u1", "assistant", "老师好", emotion="like")
     recent = ms.recent("u1", 5)
-    check("recent 保留顺序与情感后缀", recent == [
-        {"role": "user", "content": "你好"},
-        {"role": "assistant", "content": "老师好 [emotion:like]"},
-    ])
+    check("recent 保留顺序与情感后缀", (
+        [r["role"] for r in recent] == ["user", "assistant"]
+        and recent[0]["content"] == "你好"
+        and recent[1]["content"] == "老师好 [emotion:like]"
+        and all("created_at" in r for r in recent)
+    ))
 
     a = ms.update_affinity("u1", 4)
     check("好感度累加", a == 4)

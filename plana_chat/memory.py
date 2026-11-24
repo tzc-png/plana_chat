@@ -18,6 +18,27 @@ import numpy as np
 _TIME_FMT = "%Y-%m-%d %H:%M:%S"
 
 
+def relative_time(created_at: str | None, now: datetime | None = None) -> str:
+    """相对时间标签：刚刚/X 分钟前/X 小时前/昨天/X 天前；无时间返回空串。"""
+    if not created_at:
+        return ""
+    now = now or datetime.now()
+    try:
+        t = datetime.strptime(created_at, _TIME_FMT)
+    except (ValueError, TypeError):
+        return ""
+    diff = (now - t).total_seconds()
+    if diff < 60:
+        return "刚刚"
+    if diff < 3600:
+        return f"{int(diff // 60)} 分钟前"
+    if diff < 86400:
+        return f"{int(diff // 3600)} 小时前"
+    if diff < 2 * 86400:
+        return "昨天"
+    return f"{int(diff // 86400)} 天前"
+
+
 class MemoryStore:
     def __init__(self, db_path: str):
         p = Path(db_path)
@@ -108,6 +129,7 @@ class MemoryStore:
             self._ensure_column(conn, "summaries", "consolidated_upto", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(conn, "current_topic", "emotions", "TEXT NOT NULL DEFAULT '[]'")
             self._ensure_column(conn, "facts", "duration", "TEXT")
+            self._ensure_column(conn, "facts", "due_hours", "REAL")
             conn.commit()
 
     # ── 消息 ────────────────────────────────────────────────────────────────
@@ -140,12 +162,12 @@ class MemoryStore:
     def recent(self, user_id: str, n_rounds: int) -> list[dict]:
         with self._lock, closing(self._connect()) as conn:
             rows = conn.execute(
-                "SELECT role, content, emotion FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                "SELECT role, content, emotion, created_at FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?",
                 (user_id, n_rounds * 2),
             ).fetchall()
         out: list[dict] = []
         for row in reversed(rows):
-            d = {"role": row["role"], "content": row["content"]}
+            d = {"role": row["role"], "content": row["content"], "created_at": row["created_at"]}
             if row["role"] == "assistant" and row["emotion"]:
                 d["content"] = f"{d['content']} [emotion:{row['emotion']}]"
             out.append(d)
@@ -298,7 +320,7 @@ class MemoryStore:
             conn.commit()
 
     def add_open_items(self, user_id: str, items: list[dict]) -> None:
-        """存未完成事项，带 duration（short/long）。"""
+        """存未完成事项，带 duration（short/long/scheduled）与 due_hours。"""
         now = datetime.now().strftime(_TIME_FMT)
         with self._lock, closing(self._connect()) as conn:
             for it in items:
@@ -306,34 +328,39 @@ class MemoryStore:
                 if not content:
                     continue
                 duration = it.get("duration", "long")
-                if duration not in ("short", "long"):
+                if duration not in ("short", "long", "scheduled"):
                     duration = "long"
+                due_hours = it.get("due_hours")
+                try:
+                    due_hours = float(due_hours) if due_hours is not None else None
+                except (TypeError, ValueError):
+                    due_hours = None
                 conn.execute(
-                    "INSERT INTO facts(user_id, type, content, duration, created_at) VALUES(?,?,?,?,?)",
-                    (user_id, "open_item", content, duration, now),
+                    "INSERT INTO facts(user_id, type, content, duration, due_hours, created_at) VALUES(?,?,?,?,?,?)",
+                    (user_id, "open_item", content, duration, due_hours, now),
                 )
             conn.commit()
 
-    def recent_facts(self, user_id: str, ftype: str | None = None, limit: int = 20) -> list[str]:
+    def recent_facts(self, user_id: str, ftype: str | None = None, limit: int = 20) -> list[dict]:
         with self._lock, closing(self._connect()) as conn:
             if ftype:
                 rows = conn.execute(
-                    "SELECT content FROM facts WHERE user_id=? AND type=? ORDER BY id DESC LIMIT ?",
+                    "SELECT content, created_at FROM facts WHERE user_id=? AND type=? ORDER BY id DESC LIMIT ?",
                     (user_id, ftype, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT content FROM facts WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                    "SELECT content, created_at FROM facts WHERE user_id=? ORDER BY id DESC LIMIT ?",
                     (user_id, limit),
                 ).fetchall()
-        return [r["content"] for r in rows]
+        return [{"content": r["content"], "created_at": r["created_at"]} for r in rows]
 
-    def recent_open_items(self, user_id: str, limit: int = 10, short_hours: float = 2, max_hours: float = 72) -> list[str]:
-        """未完成事项；短时项超过 short_hours、长时项超过 max_hours 视为已完成，不再返回。"""
+    def recent_open_items(self, user_id: str, limit: int = 10, short_hours: float = 2, max_hours: float = 72) -> list[dict]:
+        """未完成事项；短时项超过 short_hours、长时项超过 max_hours、定时项超过 due_hours 视为已完成。"""
         now = datetime.now()
         with self._lock, closing(self._connect()) as conn:
             rows = conn.execute(
-                "SELECT content, duration, created_at FROM facts WHERE user_id=? AND type='open_item' "
+                "SELECT content, duration, due_hours, created_at FROM facts WHERE user_id=? AND type='open_item' "
                 "ORDER BY id DESC",
                 (user_id,),
             ).fetchall()
@@ -343,10 +370,16 @@ class MemoryStore:
                 created = datetime.strptime(r["created_at"], _TIME_FMT)
             except (ValueError, TypeError):
                 continue
-            expire_hours = short_hours if r["duration"] == "short" else max_hours
+            duration = r["duration"]
+            if duration == "short":
+                expire_hours = short_hours
+            elif duration == "scheduled" and r["due_hours"] is not None:
+                expire_hours = float(r["due_hours"])
+            else:
+                expire_hours = max_hours
             if (now - created).total_seconds() > expire_hours * 3600:
                 continue
-            out.append(r["content"])
+            out.append({"content": r["content"], "created_at": r["created_at"]})
             if len(out) >= limit:
                 break
         return out
@@ -581,12 +614,12 @@ class MemoryStore:
         emb = np.frombuffer(embedding, dtype=np.float32)
         with self._lock, closing(self._connect()) as conn:
             rows = conn.execute(
-                "SELECT role, content, embedding FROM messages "
+                "SELECT role, content, created_at, embedding FROM messages "
                 "WHERE user_id=? AND embedding IS NOT NULL ORDER BY id DESC",
                 (user_id,),
             ).fetchall()
 
-        scored: list[tuple[float, str, str]] = []
+        scored: list[tuple[float, str, str, str]] = []
         for row in rows[exclude_recent:]:
             v = np.frombuffer(row["embedding"], dtype=np.float32)
             if v.shape[0] != emb.shape[0]:
@@ -595,6 +628,6 @@ class MemoryStore:
             na = float(np.linalg.norm(emb))
             nb = float(np.linalg.norm(v))
             sim = dot / (na * nb) if na > 0 and nb > 0 else 0.0
-            scored.append((sim, row["role"], row["content"]))
+            scored.append((sim, row["role"], row["content"], row["created_at"]))
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [{"role": r, "content": c} for _, r, c in scored[:limit]]
+        return [{"role": r, "content": c, "created_at": t} for _, r, c, t in scored[:limit]]
