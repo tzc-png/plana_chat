@@ -194,7 +194,7 @@ class PlanaPipeline:
         history = self._drop_trailing_user(self.memory.recent(user_id, self.cfg.memory.rounds))
         # 给历史逐条加相对时间，便于模型区分「刚刚/几小时前/昨天」
         history = [
-            {"role": m["role"], "content": f"（{relative_time(m.get('created_at'))}）{m['content']}" if m.get("created_at") else m["content"]}
+            {"role": m["role"], "content": f"【{relative_time(m.get('created_at'))}】{m['content']}" if m.get("created_at") else m["content"]}
             for m in history
         ]
         user_emb = await self._embed(user_text)
@@ -229,7 +229,7 @@ class PlanaPipeline:
         if facts:
             messages.append(
                 {"role": "system", "content": "【关于老师的已知信息】\n"
-                 + "\n".join(f"- {f['content']}（{relative_time(f['created_at'])}）" for f in facts)}
+                 + "\n".join(f"- {f['content']}【{relative_time(f['created_at'])}】" for f in facts)}
             )
         open_items = self.memory.recent_open_items(
             user_id, limit=5,
@@ -239,7 +239,7 @@ class PlanaPipeline:
         if open_items:
             messages.append(
                 {"role": "system", "content": "【老师提到但尚未完成/聊完的事（可自然带一句关心，不要生硬提醒）】\n"
-                 + "\n".join(f"- {o['content']}（{relative_time(o['created_at'])}）" for o in open_items)}
+                 + "\n".join(f"- {o['content']}【{relative_time(o['created_at'])}】" for o in open_items)}
             )
 
         # 注入语义检索到的历史细节
@@ -248,7 +248,7 @@ class PlanaPipeline:
             if retrieved:
                 lines = "\n".join(
                     ("老师：" if r["role"] == "user" else "普拉娜：")
-                    + f"（{relative_time(r.get('created_at'))}）" + r["content"]
+                    + f"【{relative_time(r.get('created_at'))}】" + r["content"]
                     for r in retrieved
                 )
                 messages.append(
@@ -353,7 +353,7 @@ class PlanaPipeline:
         for m in msgs:
             who = "老师" if m["role"] == "user" else "普拉娜"
             rel = relative_time(m.get("created_at"))
-            time_part = f"（{rel}）" if rel else ""
+            time_part = f"【{rel}】" if rel else ""
             lines.append(f"{who}{time_part}: {m['content']}")
         return "\n".join(lines)
 
@@ -1075,7 +1075,7 @@ class PlanaPipeline:
         )
         if open_items:
             hint += "\n\n另外老师之前提到这些还没完成的事，可自然带一句关心（不要生硬）：" + "；".join(
-                f"{o['content']}（{relative_time(o['created_at'])}）" for o in open_items
+                f"{o['content']}【{relative_time(o['created_at'])}】" for o in open_items
             )
 
         messages = [
