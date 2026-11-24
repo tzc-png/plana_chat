@@ -79,12 +79,12 @@ plana_chat/
 
 | 文件 | 放入位置 | 来源 |
 |---|---|---|
-| `Plana-e15.ckpt`（GPT 模型） | `voice/models/` | 普拉娜专属音色模型，作者 bilibili@SLNeil（百度网盘，备用链接见下） |
+| `Plana-e15.ckpt`（GPT 模型） | `voice/models/` | 普拉娜专属音色模型，作者 bilibili@SLNeil |
 | `Plana_e16_s208.pth`（SoVITS 模型） | `voice/models/` | 同上，作者 bilibili@SLNeil |
 | `ref.wav`（参考音频） | `voice/models/` | 同上，作者 bilibili@SLNeil |
 | `chinese-hubert-base` 模型 | `voice/plana_engine/pretrained_models/chinese-hubert-base/` | [HuggingFace: TencentGameMate/chinese-hubert-base](https://huggingface.co/TencentGameMate/chinese-hubert-base) |
 
-> 💡 上面 3 个普拉娜专属模型是「普拉娜」这个音色的来源，由 **bilibili@SLNeil** 制作。备用网盘链接：
+> 💡 上面 3 个普拉娜专属模型是「普拉娜」这个音色的来源，由 **bilibili@SLNeil** 制作。个人备用存储链接：
 > 链接: https://pan.baidu.com/s/1uW2DfQESnsDdDdXeMpMq3A?pwd=72e8 提取码: 72e8
 >
 > 如果你想要**别的角色**音色，可替换成你自己的 GPT-SoVITS 模型（GPT 的 `.ckpt`、SoVITS 的 `.pth`、参考音频 `ref.wav`），并在 `config.yaml` 里改 `ref_txt` 为该参考音频对应的文本。
@@ -428,3 +428,4 @@ while FIFO 非空:
 - 语音引擎：GPT-SoVITS
 - 普拉娜音色模型：bilibili@SLNeil
 - 中文音频特征提取：TencentGameMate/chinese-hubert-base
+- shittim（其实就是我，没想到吧）
