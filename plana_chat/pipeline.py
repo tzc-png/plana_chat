@@ -359,7 +359,8 @@ class PlanaPipeline:
     async def _summarize(self, old_msgs: list[dict], existing: str | None) -> str:
         prompt = (
             "请把下面这段老师和普拉娜的对话历史，压缩成一段简洁的「长期记忆摘要」，"
-            "保留关键信息（重要事件、老师提到的个人信息、情感关系进展），控制在 200 字以内。"
+            "保留关键信息（优先情感关系进展和重大事件，其次老师提到的个人信息），控制在 200 字以内。"
+            "吃饭、睡觉、临时状态这类日常琐事可淡化或省略。"
             "如果已有摘要，请融合新旧内容（新的信息在前，旧的简略带过）。\n\n"
             f"【已有摘要】\n{existing or '（无）'}\n\n"
             f"【新增对话】\n{self._format_msgs(old_msgs)}\n\n"
