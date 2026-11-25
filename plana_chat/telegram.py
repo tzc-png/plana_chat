@@ -35,7 +35,7 @@ class TelegramBot:
         self._offset_file = Path(__file__).resolve().parent.parent / "data" / "offset"
         self.offset = self._load_offset()
         self.mode = self._load_mode()
-        self.fifo: deque[tuple[int, str, str]] = deque()  # (chat_id, user_id, text)
+        self.fifo: deque[tuple[int, str, str, str | None]] = deque()  # (chat_id, user_id, text, created_at)
 
     def _client(self) -> httpx.AsyncClient:
         kwargs: dict = {"timeout": 60, "trust_env": False}
@@ -69,7 +69,11 @@ class TelegramBot:
                     "\033[31m[拦截] 非白名单用户访问已忽略（user=%s）\033[0m", user_id
                 )
                 continue
-            self.fifo.append((chat_id, user_id, text))
+            created_at = None
+            date_ts = msg.get("date")
+            if date_ts:
+                created_at = datetime.fromtimestamp(date_ts).strftime("%Y-%m-%d %H:%M:%S")
+            self.fifo.append((chat_id, user_id, text, created_at))
 
     async def _retry_send(self, fn) -> None:
         """发送失败按 2s/4s/… 退避重试（次数可配），最终仍失败则抛出。"""
@@ -254,7 +258,7 @@ class TelegramBot:
                 logger.exception("问候调度出错")
             await asyncio.sleep(30)
 
-    async def handle_text(self, chat_id: int, user_id: str, text: str) -> None:
+    async def handle_text(self, chat_id: int, user_id: str, text: str, created_at: str | None = None) -> None:
         if self._handle_command(chat_id, text):
             return
 
@@ -263,7 +267,7 @@ class TelegramBot:
 
         # 阶段0：老师消息立即落库 + 取消提醒
         self.pipeline.memory.cancel_reminders(user_id)
-        await self.pipeline.store_user(user_id, text)
+        await self.pipeline.store_user(user_id, text, created_at)
 
         # 阶段1：①判断（无营养静默；切话题处理旧话题）
         judge = await self.pipeline._judge_topic(user_id, text)
@@ -312,7 +316,7 @@ class TelegramBot:
             await self._fetch_updates(0)
             if not self.fifo or self.fifo[0][1] != user_id:
                 break  # 无新消息，或非本用户
-            nchat, nuser, ntext = self.fifo[0]  # peek 队头
+            nchat, nuser, ntext, ndate = self.fifo[0]  # peek 队头
             njudge = await self.pipeline._judge_topic(user_id, ntext)
             if not njudge["has_content"]:
                 logger.info("忽略无营养新消息：%s", ntext)
@@ -322,7 +326,7 @@ class TelegramBot:
                 return  # 不同话题 → 放弃，回主循环处理新消息
             # 同话题 → 合并
             self.fifo.popleft()
-            await self.pipeline.store_user(user_id, ntext)
+            await self.pipeline.store_user(user_id, ntext, ndate)
             pending.append(ntext)
             # 合并分支也推进 current_topic，避免停在首条消息的裸话题
             self.pipeline.memory.set_current_topic(user_id, njudge["topic"], "normal")
@@ -445,10 +449,10 @@ class TelegramBot:
                 await self._fetch_updates(30)
                 # 逐条处理 FIFO
                 while self.fifo:
-                    chat_id, user_id, text = self.fifo.popleft()
+                    chat_id, user_id, text, created_at = self.fifo.popleft()
                     logger.info("[老师] chat=%s: %s", chat_id, text)
                     try:
-                        await self.handle_text(chat_id, user_id, text)
+                        await self.handle_text(chat_id, user_id, text, created_at)
                     except Exception:
                         logger.exception("处理消息失败 chat=%s", chat_id)
                         try:

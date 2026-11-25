@@ -267,9 +267,9 @@ class PlanaPipeline:
         display_text = strip_emotion_tag(raw)
         return display_text, emotion
 
-    async def store_user(self, user_id: str, user_text: str) -> None:
+    async def store_user(self, user_id: str, user_text: str, created_at: str | None = None) -> None:
         """阶段0：老师消息立即落库（只存文本，embedding 延迟到阶段2 计算回填）。"""
-        self.memory.add(user_id, "user", user_text, embedding=None)
+        self.memory.add(user_id, "user", user_text, embedding=None, created_at=created_at)
 
     async def make_voice(self, display_text: str) -> bytes | None:
         """生成语音（WAV 字节）；纯文字模式返回 None。"""

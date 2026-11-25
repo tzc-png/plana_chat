@@ -140,8 +140,9 @@ class MemoryStore:
         content: str,
         emotion: str | None = None,
         embedding: bytes | None = None,
+        created_at: str | None = None,
     ) -> None:
-        now = datetime.now().strftime(_TIME_FMT)
+        now = created_at or datetime.now().strftime(_TIME_FMT)
         with self._lock, closing(self._connect()) as conn:
             conn.execute(
                 "INSERT INTO messages(user_id, role, content, emotion, embedding, created_at) "
