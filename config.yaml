@@ -78,7 +78,7 @@ greeting:
   chat_ids: [9045953592]           # 主动问候的 Telegram chat_id（可加多个）
   reminder_minutes: 20             # 重新提醒间隔（分钟），如加班/贪睡后的再次提醒
   meal_duration_hours: 2            # 「吃饭/用餐」动作持续时间（小时），超过则问候视为已吃完
-  recent_minutes: 30                # 最近多少分钟内有对话则跳过定时问候（视为进行中）
+  recent_minutes: 60                # 最近多少分钟内有对话则跳过定时问候（视为进行中）
 
 emotion:
   enabled: false                   # 是否发送情感表情图（默认关闭）

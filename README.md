@@ -204,7 +204,7 @@ plana help                 # 查看所有指令
 | | `open_item_short_hours` / `open_item_max_hours` | 未完成事项的短时/长时完成时长（小时，默认 2 / 72） |
 | `reply` | `mode` | `text_voice`（文字+语音，默认）/ `voice` / `text` |
 | `telegram` | `token_env` / `proxy` / `allow_user_ids` | token 环境变量名 / 代理地址 / 用户白名单（空=不限制） |
-| `greeting` | `enabled` / `times` / `chat_ids` / `reminder_minutes` / `meal_duration_hours` / `recent_minutes` | 主动问候开关 / 时刻 / 目标用户 / 重新提醒间隔（分钟）/ 吃饭动作持续时间（小时，默认 2，超过则视为已吃完）/ 最近多少分钟内有对话则跳过问候（默认 30） |
+| `greeting` | `enabled` / `times` / `chat_ids` / `reminder_minutes` / `meal_duration_hours` / `recent_minutes` | 主动问候开关 / 时刻 / 目标用户 / 重新提醒间隔（分钟）/ 吃饭动作持续时间（小时，默认 2，超过则视为已吃完）/ 最近多少分钟内有对话则跳过问候（默认 60） |
 | `behavior` | `mode` / `follow_up` / `settle_delay` / `self_review` / `affinity_scale` | 运行模式 / 话题续接开关 / 发送前等待（秒）/ 文本与情感自检开关 / 好感度缩放系数（默认2） |
 | `emotion` | `enabled` / `image_dir` | 表情图开关（默认关）/ 表情图目录（见下） |
 | `search` | `enabled` | 智能搜索开关（默认关） |
@@ -213,7 +213,7 @@ plana help                 # 查看所有指令
 
 ### 主动问候
 
-`greeting.enabled: true` 时，每天在 `times` 列出的时刻（北京时间，默认 8:00/11:00/21:00）主动向 `chat_ids` 里的用户发问候。问候是**上下文感知**的：最近 `recent_minutes`（默认 30）分钟内有进行中对话则跳过；否则把最近对话喂给 LLM，按情境演绎（已说晚安→轻声自语「睡着了」、生病→关心等）。文案不固定，若有「未完成的事」会顺带关心；**早上若遇到节日/纪念日，会带一句应景祝福（纪念日优先于节日）。**
+`greeting.enabled: true` 时，每天在 `times` 列出的时刻（北京时间，默认 8:00/11:00/21:00）主动向 `chat_ids` 里的用户发问候。问候是**上下文感知**的：最近 `recent_minutes`（默认 60）分钟内有进行中对话则跳过；否则把最近对话喂给 LLM，按情境演绎（已说晚安→轻声自语「睡着了」、生病→关心等）。文案不固定，若有「未完成的事」会顺带关心；**早上若遇到节日/纪念日，会带一句应景祝福（纪念日优先于节日）。**
 
 **重新提醒**：若你对问候的反应是「要加班/要贪睡」，普拉娜会挂起一个提醒任务，默认 `reminder_minutes`（20）分钟后自动再提醒一次；期间你发任意消息则取消提醒，等待期间她不会主动发起话题。
 
