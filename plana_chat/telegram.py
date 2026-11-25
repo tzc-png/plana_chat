@@ -273,6 +273,12 @@ class TelegramBot:
         judge = await self.pipeline._judge_topic(user_id, text)
         if not judge["has_content"]:
             logger.info("无营养消息，静默跳过：%s", text)
+            # 无营养消息也判断一次话题是否收尾，若收尾则拾起旧话题
+            try:
+                if await self.pipeline._topic_finished_after_no_content(user_id, text):
+                    await self._settle_and_resume(chat_id, user_id, text)
+            except Exception:
+                logger.warning("无营养消息后的收尾判断失败", exc_info=True)
             return
         if not judge["same"]:
             cur = self.pipeline.memory.get_current_topic(user_id)
@@ -372,6 +378,22 @@ class TelegramBot:
             except Exception:
                 logger.exception("话题续接失败")
 
+    async def _settle_and_resume(self, chat_id: int, user_id: str, text: str) -> None:
+        """结算当前话题好感度并拾起一个挂起话题（若合适）。"""
+        self.pipeline._settle_topic_affinity(user_id)
+        resume = await self.pipeline._resume_pending_topic(user_id)
+        if resume:
+            try:
+                resume, _ = await self.pipeline.self_review(user_id, text, resume, "neutral")
+            except Exception:
+                pass
+            await self._fetch_updates(0)
+            if self.fifo:
+                logger.info("跳过拾起：有新消息")
+                return
+            await self.send_text(chat_id, resume)
+            await self.pipeline.store_assistant(user_id, resume)
+
     async def _topic_follow_up(self, chat_id: int, user_id: str, text: str, display_text: str) -> None:
         """话题续接：二态判断 finished / continuing，续接或结算+拾起。"""
         if self.pipeline.memory.has_pending_reminder(user_id):
@@ -396,21 +418,7 @@ class TelegramBot:
                 await self.send_text(chat_id, cont)
                 await self.pipeline.store_assistant(user_id, cont)
         else:  # finished
-            # 结算当前话题好感度
-            self.pipeline._settle_topic_affinity(user_id)
-            # 拾起挂起话题
-            resume = await self.pipeline._resume_pending_topic(user_id)
-            if resume:
-                try:
-                    resume, _ = await self.pipeline.self_review(user_id, text, resume, "neutral")
-                except Exception:
-                    pass
-                await self._fetch_updates(0)
-                if self.fifo:
-                    logger.info("跳过拾起：有新消息")
-                    return
-                await self.send_text(chat_id, resume)
-                await self.pipeline.store_assistant(user_id, resume)
+            await self._settle_and_resume(chat_id, user_id, text)
 
     async def _reminder_loop(self) -> None:
         """每 60 秒检查一次是否有到期的提醒任务。"""

@@ -749,6 +749,32 @@ class PlanaPipeline:
         logger.info("话题判定：%s", state)
         return state
 
+    async def _topic_finished_after_no_content(self, user_id: str, user_text: str) -> bool:
+        """无营养消息后判断当前话题是否已自然收尾（普拉娜没回复这句话）。"""
+        cur = self.memory.get_current_topic(user_id)
+        if not cur["topic"]:
+            return False
+        prompt = (
+            "老师刚才发了一句没有实际内容的话（如「嗯嗯」「哦」「❤️」），普拉娜没有回复。\n"
+            "请判断当前话题是否已经自然收尾、结束了：\n"
+            f"当前话题：{cur['topic']}\n"
+            f"老师这句：{user_text}\n\n"
+            '严格只输出 JSON：{"finished": true|false}'
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return False
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return False
+        return bool(data.get("finished", False))
+
     async def _topic_continuation(self, user_id: str, topic: str, user_text: str, display_text: str) -> str | None:
         """生成一句自然的话题续接（带上文，避免与主回复重复或时态错乱）。"""
         prompt = (
@@ -833,7 +859,8 @@ class PlanaPipeline:
         """生成一句自然提起挂起话题的文案（15 字左右，不带情感标签）。"""
         prompt = (
             f"普拉娜之前和老师聊到一个话题没聊完，现在想自然地重新提起。\n"
-            f"请生成一句自然、克制的提起文案（15 字左右，符合普拉娜性格，不要带情感标签）。\n\n"
+            f"请生成一句自然、克制的提起文案（15 字左右，符合普拉娜性格，不要带情感标签）。\n"
+            f"可以用「对了」「我突然想起来」「话说回来」这类短句自然过渡，避免突兀。\n\n"
             f"挂起的话题：{topic_content}\n\n"
             "只输出文案。"
         )
