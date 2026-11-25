@@ -49,6 +49,7 @@ usage() {
   active      切换为 active 模式（总是追问）
   default     切换为 default 模式（追问动态决策，默认）
   edit        编辑记忆（需先 plana off；与 bot 互斥运行）
+  test        测试网络与各依赖服务连通性
   system_on   安装并启用 systemd 服务（开机自启，需 sudo）
   system_off  停止并禁用 systemd 服务（需 sudo）
   status      查看运行状态
@@ -135,6 +136,10 @@ case "${1:-}" in
   edit)
     shift
     "$VENV_PY" "$PLANA_ROOT/scripts/edit_memory.py" "$@"
+    ;;
+
+  test)
+    "$VENV_PY" "$PLANA_ROOT/scripts/test_health.py"
     ;;
 
   system_on)

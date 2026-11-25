@@ -178,6 +178,7 @@ plana quiet                # 切换 quiet 模式（免打扰）
 plana active               # 切换 active 模式（总是追问）
 plana default              # 切换 default 模式（追问动态决策）
 plana edit                 # 编辑记忆（需先 plana off；与 bot 互斥运行）
+plana test                 # 测试网络与各依赖服务连通性
 plana system_on            # 设为 systemd 服务（开机自启，需 sudo）
 plana system_off           # 取消开机自启（需 sudo）
 plana help                 # 查看所有指令
