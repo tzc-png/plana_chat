@@ -71,6 +71,21 @@ class TelegramBot:
                 continue
             self.fifo.append((chat_id, user_id, text))
 
+    async def _retry_send(self, fn, retries: int = 3) -> None:
+        """发送失败按 2s/4s 退避重试，最终仍失败则抛出。"""
+        last_exc: Exception | None = None
+        for i in range(retries):
+            try:
+                await fn()
+                return
+            except Exception as e:
+                last_exc = e
+                if i < retries - 1:
+                    logger.warning("发送失败（%s），%d 秒后重试", type(e).__name__, (i + 1) * 2)
+                    await asyncio.sleep((i + 1) * 2)
+        if last_exc is not None:
+            raise last_exc
+
     async def send_chat_action(self, chat_id: int, action: str) -> None:
         async with self._client() as client:
             await client.post(
@@ -80,22 +95,30 @@ class TelegramBot:
 
     async def send_text(self, chat_id: int, text: str) -> None:
         logger.info("[普拉娜] chat=%s: %s", chat_id, text)
-        async with self._client() as client:
-            resp = await client.post(
-                f"{self.api}/sendMessage",
-                json={"chat_id": chat_id, "text": text},
-            )
-            resp.raise_for_status()
+
+        async def _do():
+            async with self._client() as client:
+                resp = await client.post(
+                    f"{self.api}/sendMessage",
+                    json={"chat_id": chat_id, "text": text},
+                )
+                resp.raise_for_status()
+
+        await self._retry_send(_do)
 
     async def send_voice(self, chat_id: int, ogg: bytes) -> None:
         logger.info("[普拉娜] chat=%s: [语音]（%d 字节）", chat_id, len(ogg))
-        async with self._client() as client:
-            resp = await client.post(
-                f"{self.api}/sendVoice",
-                data={"chat_id": str(chat_id)},
-                files={"voice": ("voice.ogg", ogg, "audio/ogg")},
-            )
-            resp.raise_for_status()
+
+        async def _do():
+            async with self._client() as client:
+                resp = await client.post(
+                    f"{self.api}/sendVoice",
+                    data={"chat_id": str(chat_id)},
+                    files={"voice": ("voice.ogg", ogg, "audio/ogg")},
+                )
+                resp.raise_for_status()
+
+        await self._retry_send(_do)
 
     async def send_photo(self, chat_id: int, photo_path) -> None:
         path = Path(photo_path)
@@ -106,14 +129,18 @@ class TelegramBot:
             ".jpeg": "image/jpeg",
             ".webp": "image/webp",
         }.get(path.suffix.lower(), "image/png")
-        async with self._client() as client:
-            with open(path, "rb") as f:
-                resp = await client.post(
-                    f"{self.api}/sendPhoto",
-                    data={"chat_id": str(chat_id)},
-                    files={"photo": (path.name, f, mime)},
-                )
-            resp.raise_for_status()
+
+        async def _do():
+            async with self._client() as client:
+                with open(path, "rb") as f:
+                    resp = await client.post(
+                        f"{self.api}/sendPhoto",
+                        data={"chat_id": str(chat_id)},
+                        files={"photo": (path.name, f, mime)},
+                    )
+                resp.raise_for_status()
+
+        await self._retry_send(_do)
 
     def _emotion_image(self, emotion: str):
         """从 emotion 对应的文件夹里随机选一张表情图；无图返回 None。"""
