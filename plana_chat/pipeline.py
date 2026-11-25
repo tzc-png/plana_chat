@@ -849,7 +849,8 @@ class PlanaPipeline:
         if not await self._can_chat(user_id):
             return None
         fresh_hours = self.cfg.memory.get("topic_fresh_hours", 1)
-        for t in self.memory.get_open_topics(user_id, limit=3, fresh_hours=fresh_hours):
+        limit = self.cfg.memory.get("resume_topic_limit", 3)
+        for t in self.memory.get_open_topics(user_id, limit=limit, fresh_hours=fresh_hours):
             state = await self._topic_suitability(user_id, t["content"], t.get("created_at", ""))
             if state == "suitable":
                 is_emotion = t["type"] == "plana_emotion"

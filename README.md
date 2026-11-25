@@ -201,7 +201,7 @@ plana help                 # 查看所有指令
 | `memory` | `rounds` | 每用户保留最近 N 轮 |
 | | `compact_threshold` | 未整理消息数超该值触发「总结压缩 + 事实抽取」 |
 | | `embedding_model` / `retrieve_top_k` | 语义检索用的 embedding 模型 / 注入的历史条数 |
-| | `topic_fresh_hours` / `topic_idle_minutes` | 挂起话题「新鲜」时间窗（小时，默认 1）/ 话题静默超时（分钟，默认 60，超时自动结算） |
+| | `topic_fresh_hours` / `topic_idle_minutes` / `resume_topic_limit` | 挂起话题「新鲜」时间窗（小时，默认 1）/ 话题静默超时（分钟，默认 60，超时自动结算）/ 每次拾起最多考察几条（默认 3） |
 | | `open_item_short_hours` / `open_item_max_hours` | 未完成事项的短时/长时完成时长（小时，默认 2 / 72） |
 | `reply` | `mode` | `text_voice`（文字+语音，默认）/ `voice` / `text` |
 | `telegram` | `token_env` / `proxy` / `allow_user_ids` / `send_retries` | token 环境变量名 / 代理地址 / 用户白名单（空=不限制）/ 发送失败重试次数（默认 3） |
@@ -318,7 +318,7 @@ while FIFO 非空:
 | 第 2 层 | 超过 N 小时的吃醋事件 | 时间倒序 |
 | 第 3 层 | 超过 N 小时的普通话题 | 时间倒序 |
 
-拾起时逐条判断三态 `suitable / stale / not_now`（一次 LLM 每条，最多 3 条）：
+拾起时逐条判断三态 `suitable / stale / not_now`（一次 LLM 每条，最多 `resume_topic_limit` 条，默认 3）：
 - `suitable` → 生成提起文案 → 成为 current_topic → 关闭该话题（普通话题的 current_topic 记为「提起文案 + 原话题」，兼顾回应提起文案或回应原话题；抽取原始话题作根，避免多层「原话题」嵌套）
 - `stale` → 关闭（已过时）
 - `not_now` → 保留（氛围不对，等下次）
@@ -355,7 +355,7 @@ while FIFO 非空:
 另外两个相关机制：
 
 - **回复自检 + 情感自检**：`self_review: true` 时，发送前让 LLM 分别审查「文本是否与上下文矛盾」与「情感标签是否符合关系阶段」，有问题则修正（各多一次轻量 LLM 调用）
-- **拾起挂起话题**：话题 `finished` 后，先判断老师是否方便，再按三层优先级对挂起话题逐条判断「是否仍合适」（综合时效性 + 当前氛围，最多 3 条）——合适则提起并关闭、过时则关闭、暂不合适则保留
+- **拾起挂起话题**：话题 `finished` 后，先判断老师是否方便，再按三层优先级对挂起话题逐条判断「是否仍合适」（综合时效性 + 当前氛围，最多 `resume_topic_limit` 条）——合适则提起并关闭、过时则关闭、暂不合适则保留
 
 ### 智能搜索
 
