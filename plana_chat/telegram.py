@@ -71,8 +71,9 @@ class TelegramBot:
                 continue
             self.fifo.append((chat_id, user_id, text))
 
-    async def _retry_send(self, fn, retries: int = 3) -> None:
-        """发送失败按 2s/4s 退避重试，最终仍失败则抛出。"""
+    async def _retry_send(self, fn) -> None:
+        """发送失败按 2s/4s/… 退避重试（次数可配），最终仍失败则抛出。"""
+        retries = max(1, int(self.cfg.telegram.get("send_retries", 3)))
         last_exc: Exception | None = None
         for i in range(retries):
             try:
