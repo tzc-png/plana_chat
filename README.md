@@ -201,7 +201,7 @@ plana help                 # 查看所有指令
 | `memory` | `rounds` | 每用户保留最近 N 轮 |
 | | `compact_threshold` | 未整理消息数超该值触发「总结压缩 + 事实抽取」 |
 | | `embedding_model` / `retrieve_top_k` | 语义检索用的 embedding 模型 / 注入的历史条数 |
-| | `topic_fresh_hours` / `topic_idle_minutes` / `resume_topic_limit` | 挂起话题「新鲜」时间窗（小时，默认 1）/ 话题静默超时（分钟，默认 60，超时自动结算）/ 每次拾起最多考察几条（默认 8） |
+| | `topic_fresh_hours` / `topic_idle_minutes` / `resume_topic_limit` / `topic_max_chars` | 挂起话题「新鲜」时间窗（小时，默认 1）/ 话题静默超时（分钟，默认 60，超时自动结算）/ 每次拾起最多考察几条（默认 8）/ 话题总结长度上限（字，默认 80） |
 | | `open_item_short_hours` / `open_item_max_hours` | 未完成事项的短时/长时完成时长（小时，默认 2 / 72） |
 | `reply` | `mode` | `text_voice`（文字+语音，默认）/ `voice` / `text` |
 | `telegram` | `token_env` / `proxy` / `allow_user_ids` / `send_retries` | token 环境变量名 / 代理地址 / 用户白名单（空=不限制）/ 发送失败重试次数（默认 3） |
@@ -262,7 +262,7 @@ while FIFO 非空:
 
 **阶段 1 · ①判断**（一次 LLM，输出四字段 `has_content / same / topic / old_context`）：
 - 输入：`user_text` + `current_topic`
-- `topic` 是**一句话的起因经过结果总结**（每轮衔接「当前话题」的前提与新消息累积），不是只写最新一句
+- `topic` 是**当前正在聊的「这一件事」**的一句话总结（起因经过结果，`topic_max_chars` 字以内）；`same` 判断「是否还在聊同一件事」，不是「同一个大主题」——中午吃饭和晚上散步应判成两件事
 - 分支：
   - `has_content = false`（无营养「嗯嗯」）→ **静默跳过**，不生成、不回复
   - `same = false`（切话题）→ 处理旧话题：

@@ -53,6 +53,7 @@ memory:
   topic_fresh_hours: 1         # 挂起话题「新鲜」时间窗（小时），此窗口内优先拾起
   topic_idle_minutes: 60       # 话题静默超时（分钟）：超过该时长无人说话，自动结算并挂起
   resume_topic_limit: 8        # 每次拾起挂起话题时最多考察几条（从中挑 1 条合适的拾起）
+  topic_max_chars: 80          # 话题总结（topic 字段）的长度上限（字）
   open_item_short_hours: 2     # 短时未完成事项（吃饭/睡觉等）的完成时长（小时）；属于 facts 表的 open_item，与 topics 的挂起话题无关
   open_item_max_hours: 72      # 长时未完成事项的兜底过期时长（小时，原 3 天）；同属 facts 表 open_item
 

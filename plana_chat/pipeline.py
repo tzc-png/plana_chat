@@ -687,11 +687,12 @@ class PlanaPipeline:
         if recent and recent[-1].get("role") == "user" and recent[-1].get("content") == user_text:
             recent = recent[:-1]
         context = self._format_msgs(recent) if recent else "（无）"
+        max_chars = self.cfg.memory.get("topic_max_chars", 80)
         prompt = (
             "请判断老师这句话，输出四个字段：\n"
             "1. has_content：这句话是否有实际指向（「嗯嗯」「哦」「这样啊」等无营养内容 → false）\n"
-            "2. same：这句话和「当前话题」是否同一个话题\n"
-            "3. topic：当前话题的一句话总结，必须涵盖起因、经过、结果（衔接「当前话题」里的前提与这条新消息，别只写最新一句）\n"
+            "2. same：这句话和「当前话题」是否还在聊同一件事（同一件事/同一个活动，不是同一个大主题；比如中午吃饭和晚上散步是两件事，应判 false）\n"
+            f"3. topic：当前正在聊的「这一件事」的一句话总结，涵盖起因、经过、结果；只概括当前这件事，不要累积成整天的时间线；控制在 {max_chars} 字以内\n"
             "4. old_context：仅当 same=false 时，之前那个话题的起因经过结果 + 未完成部分；若该话题已自然收束、无未完成部分，则输出空字符串\n\n"
             f"当前话题：{cur['topic']}（类型：{cur['kind']}）\n"
             f"老师这句话：{user_text}\n\n"
