@@ -18,8 +18,10 @@ from plana_chat import postprocess
 from plana_chat.config import Config
 from plana_chat.memory import MemoryStore
 from plana_chat.pipeline import (
+    COHABITATION,
     EMOTION_SCORES,
     STAGE_BASE_SCORES,
+    STAGE_COHABITATION,
     STAGE_THRESHOLDS,
     PlanaPipeline,
 )
@@ -95,6 +97,10 @@ def test_relationship() -> None:
     print("== 关系系统 ==")
     check("STAGE_BASE_SCORES 陌生=1 熟悉=0", STAGE_BASE_SCORES == {"陌生": 1, "熟悉": 0})
     check("阈值顺序正确", STAGE_THRESHOLDS == {"陌生": 0, "熟悉": 10, "喜欢": 30, "恋爱": 60, "结婚": 100})
+    check("同住状态映射正确",
+          STAGE_COHABITATION == {"陌生": "未同居", "熟悉": "未同居", "喜欢": "未同居",
+                                 "恋爱": "恋爱", "结婚": "结婚"})
+    check("同住状态三档齐全", set(COHABITATION) == {"未同居", "恋爱", "结婚"})
 
     # 基础好感度叠加（话题级：陌生 +1 / 熟悉 +0，受 scale 调控）
     scale = 1
