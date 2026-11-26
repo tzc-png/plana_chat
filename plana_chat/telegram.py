@@ -286,7 +286,9 @@ class TelegramBot:
             if cur["kind"] == "emotion":
                 await self.pipeline._settle_emotion(user_id, cur["topic"])
             elif cur["topic"]:
-                self.pipeline._hang_topic(user_id, cur["topic"], judge.get("old_context", ""))
+                h = await self.pipeline._judge_hang(user_id, cur["topic"])
+                if h["hang"]:
+                    self.pipeline._hang_topic(user_id, cur["topic"], h.get("unfinished", ""))
             self.pipeline._settle_topic_affinity(user_id)  # 旧话题好感度结算
         self.pipeline.memory.set_current_topic(user_id, judge["topic"], "normal")
 

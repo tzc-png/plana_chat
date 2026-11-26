@@ -93,6 +93,7 @@ _CALLER_LABELS = {
     "_topic_decision": "续接判断",
     "_topic_continuation": "续接生成",
     "_judge_topic": "话题判断",
+    "_judge_hang": "挂起判断",
     "_can_chat": "是否方便",
     "_topic_suitability": "合适性判断",
     "_resume_topic_text": "拾起话题",
@@ -554,11 +555,11 @@ class PlanaPipeline:
         return s
 
     def _hang_topic(self, user_id: str, topic: str, context: str = "", created_at: str | None = None) -> None:
-        """切话题/静默超时，把旧话题挂起（含未完成上下文）。已自然收束的话题不再挂起。
-        created_at 为事件实际发生时间（静默超时路径传 last_message_time），缺省为当前时刻。"""
+        """切话题/静默超时，把旧话题挂起（含未完成上下文）。是否挂起由调用方（_judge_hang）决定，
+        这里仅在无未完成文本时兜底不挂。created_at 为事件实际发生时间，缺省为当前时刻。"""
         ctx = (context or "").strip()
-        if not ctx or "无未完成" in ctx or "已收束" in ctx:
-            logger.info("话题已收束，不挂起：%s", topic)
+        if not ctx:
+            logger.info("无未完成部分，不挂起：%s", topic)
             return
         content = topic + f"（未完成：{ctx}）"
         self.memory.add_topic(user_id, "user_topic", content, importance=1, created_at=created_at)
@@ -698,11 +699,11 @@ class PlanaPipeline:
             logger.info("挂起话题已过期关闭：%s", t["content"])
 
     async def _judge_topic(self, user_id: str, user_text: str) -> dict:
-        """①判断：一次 LLM 输出 {has_content, same, topic, old_context}。"""
+        """①判断：一次 LLM 输出 {has_content, same, topic}（是否挂起由 _judge_hang 单独判断）。"""
         cur = self.memory.get_current_topic(user_id)
         if not cur["topic"]:
             # 首次对话，无当前话题：视为新话题，直接进入
-            return {"has_content": True, "same": True, "topic": user_text[:40], "old_context": ""}
+            return {"has_content": True, "same": True, "topic": user_text[:40]}
 
         recent = self.memory.recent(user_id, 3)
         # 阶段0已把老师这句话写入库，若它出现在历史末尾则去掉，避免与下面的「老师这句话」重复
@@ -711,15 +712,14 @@ class PlanaPipeline:
         context = self._format_msgs(recent) if recent else "（无）"
         max_chars = self.cfg.memory.get("topic_max_chars", 80)
         prompt = (
-            "请判断老师这句话，输出四个字段：\n"
+            "请判断老师这句话，输出三个字段：\n"
             "1. has_content：这句话是否有实际指向（「嗯嗯」「哦」「这样啊」等无营养内容 → false）\n"
             "2. same：这句话和「当前话题」是否还在聊同一件事（同一件事/同一个活动，不是同一个大主题；比如中午吃饭和晚上散步是两件事，应判 false）\n"
-            f"3. topic：当前正在聊的「这一件事」的一句话总结，涵盖起因、经过、结果；只概括当前这件事，不要累积成整天的时间线；控制在 {max_chars} 字以内\n"
-            "4. old_context：仅当 same=false 时，之前那个话题的起因经过结果 + 未完成部分；若该话题已自然收束、无未完成部分，则输出空字符串\n\n"
+            f"3. topic：当前正在聊的「这一件事」的一句话总结，涵盖起因、经过、结果；只概括当前这件事，不要累积成整天的时间线；控制在 {max_chars} 字以内\n\n"
             f"当前话题：{cur['topic']}（类型：{cur['kind']}）\n"
             f"老师这句话：{user_text}\n\n"
             f"【最近的对话】\n{context}\n\n"
-            '严格只输出 JSON：{"has_content": true|false, "same": true|false, "topic": "...", "old_context": "..."}'
+            '严格只输出 JSON：{"has_content": true|false, "same": true|false, "topic": "..."}'
         )
         messages = [
             {"role": "system", "content": self._system_prompt(user_id)},
@@ -728,18 +728,49 @@ class PlanaPipeline:
         raw = await self._chat_with_fallback(messages)
         m = re.search(r"\{.*\}", raw, re.S)
         if not m:
-            return {"has_content": True, "same": True, "topic": user_text[:40], "old_context": ""}
+            return {"has_content": True, "same": True, "topic": user_text[:40]}
         try:
             data = json.loads(m.group(0))
         except Exception:
-            return {"has_content": True, "same": True, "topic": user_text[:40], "old_context": ""}
+            return {"has_content": True, "same": True, "topic": user_text[:40]}
         result = {
             "has_content": bool(data.get("has_content", True)),
             "same": bool(data.get("same", True)),
             "topic": str(data.get("topic", user_text[:40])),
-            "old_context": str(data.get("old_context", "")),
         }
         logger.info("话题判断：has_content=%s same=%s topic=%s", result["has_content"], result["same"], result["topic"])
+        return result
+
+    async def _judge_hang(self, user_id: str, topic: str) -> dict:
+        """切话题后，单独判断旧话题是否该挂起：{hang, unfinished}。"""
+        recent = self.memory.recent(user_id, 3)
+        context = self._format_msgs(recent) if recent else "（无）"
+        prompt = (
+            f"老师刚才切走了话题，之前的旧话题是：{topic}\n"
+            "请判断这个旧话题是否已经自然收束、无需再聊：\n"
+            "- 已收束（聊完了、双方都接受结束、没有实质遗留）→ {\"hang\": false}\n"
+            "- 还有实质未完成/没聊完的事 → {\"hang\": true, \"unfinished\": \"一句话说明未完成部分\"}\n"
+            "注意：不要为「对方是否到家」「一句客套还没回」这类琐碎不确定留尾巴；真正收束了就输出 hang=false。\n\n"
+            f"【最近的对话】\n{context}\n\n"
+            '严格只输出 JSON：{"hang": true|false, "unfinished": "..."}'
+        )
+        messages = [
+            {"role": "system", "content": self._system_prompt(user_id)},
+            {"role": "user", "content": prompt},
+        ]
+        raw = await self._chat_with_fallback(messages)
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return {"hang": False, "unfinished": ""}
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return {"hang": False, "unfinished": ""}
+        result = {
+            "hang": bool(data.get("hang")),
+            "unfinished": str(data.get("unfinished", "")),
+        }
+        logger.info("挂起判断：hang=%s unfinished=%s", result["hang"], result["unfinished"])
         return result
 
     async def _topic_decision(self, user_id: str, user_text: str, display_text: str) -> str:
