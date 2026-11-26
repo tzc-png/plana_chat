@@ -382,6 +382,8 @@ class TelegramBot:
     async def _settle_and_resume(self, chat_id: int, user_id: str, text: str) -> None:
         """结算当前话题好感度并拾起一个挂起话题（若合适）。"""
         self.pipeline._settle_topic_affinity(user_id)
+        # 清空当前话题：话题已结束，无论是否拾起都不再残留（避免静默超时误挂起幽灵话题）
+        self.pipeline.memory.set_current_topic(user_id, "", "normal")
         resume = await self.pipeline._resume_pending_topic(user_id)
         if resume:
             try:
