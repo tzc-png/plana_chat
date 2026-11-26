@@ -73,7 +73,7 @@ behavior:
   follow_up_delay: 4               # 续接前的等待（秒）
   settle_delay: 1.5                # 发送前等待（秒），让用户正在输入的消息有时间到达再合并
   self_review: true                # 文本与情感自检开关
-  affinity_scale: 2                # 好感度缩放系数（情绪分 × 此系数，负数也乘）
+  affinity_scale: 1                # 好感度缩放系数（情绪分 × 此系数，负数也乘）
 
 greeting:
   enabled: true
