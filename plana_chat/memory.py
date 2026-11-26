@@ -505,13 +505,16 @@ class MemoryStore:
             conn.commit()
 
     # ── 话题表 ──────────────────────────────────────────────────────────
-    def add_topic(self, user_id: str, type_: str, content: str, importance: int = 1) -> None:
-        now = datetime.now().strftime(_TIME_FMT)
+    def add_topic(self, user_id: str, type_: str, content: str, importance: int = 1,
+                  created_at: str | None = None) -> None:
+        """挂起一个话题。created_at 缺省为当前时刻；静默超时挂起时传入「事件实际发生时间」，
+        让时效判断与三层拾起优先级用真实事件时间，而非挂起时刻。"""
+        ts = created_at or datetime.now().strftime(_TIME_FMT)
         with self._lock, closing(self._connect()) as conn:
             conn.execute(
                 "INSERT INTO topics(user_id, type, content, status, importance, created_at, updated_at) "
                 "VALUES(?,?,?,?,?,?,?)",
-                (user_id, type_, content, "open", importance, now, now),
+                (user_id, type_, content, "open", importance, ts, ts),
             )
             conn.commit()
 

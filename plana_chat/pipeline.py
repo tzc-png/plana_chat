@@ -18,7 +18,7 @@ from .config import Config
 from .embedding import embed_text
 from .llm import build_llm, build_local_llm
 from .llm.base import ChatLLM
-from .memory import MemoryStore, relative_time
+from .memory import MemoryStore, relative_time, _TIME_FMT
 from .postprocess import clean_for_tts, extract_emotion, strip_emotion_tag
 from .search import web_search
 from .translator import Translator
@@ -534,14 +534,15 @@ class PlanaPipeline:
             s = s.strip()
         return s
 
-    def _hang_topic(self, user_id: str, topic: str, context: str = "") -> None:
-        """切话题时，把旧话题挂起（含未完成上下文）。已自然收束的话题不再挂起。"""
+    def _hang_topic(self, user_id: str, topic: str, context: str = "", created_at: str | None = None) -> None:
+        """切话题/静默超时，把旧话题挂起（含未完成上下文）。已自然收束的话题不再挂起。
+        created_at 为事件实际发生时间（静默超时路径传 last_message_time），缺省为当前时刻。"""
         ctx = (context or "").strip()
         if not ctx or "无未完成" in ctx or "已收束" in ctx:
             logger.info("话题已收束，不挂起：%s", topic)
             return
         content = topic + f"（未完成：{ctx}）"
-        self.memory.add_topic(user_id, "user_topic", content, importance=1)
+        self.memory.add_topic(user_id, "user_topic", content, importance=1, created_at=created_at)
         logger.info("挂起话题：%s", content)
 
     async def _maybe_settle_idle_topic(self, user_id: str) -> None:
@@ -558,7 +559,9 @@ class PlanaPipeline:
         if cur["kind"] == "emotion":
             await self._settle_emotion(user_id, cur["topic"])
         else:
-            self._hang_topic(user_id, cur["topic"], "静默超时，未聊完")
+            # 用「最后一次活动时间」作为事件时间，避免挂起时刻（≈now）被误当成事件发生时间
+            self._hang_topic(user_id, cur["topic"], "静默超时，未聊完",
+                             created_at=last.strftime(_TIME_FMT))
         self._settle_topic_affinity(user_id)
         self.memory.set_current_topic(user_id, "", "normal")
         logger.info("话题静默超时已结算：%s", cur["topic"])
@@ -835,8 +838,9 @@ class PlanaPipeline:
             "- stale：话题已失效/过时（事情已结束、明显是过去式），再提很突兀\n"
             "- not_now：话题还有效，但当前氛围/时机不适合（如老师正忙、情绪不对），先保留\n\n"
             f"当前时间：{now}\n"
-            f"话题挂起时间：{created_at}\n"
+            f"话题发生时间：{created_at}\n"
             f"话题内容：{topic_content}\n\n"
+            "（注：话题发生时间是该话题实际发生/最后聊到的时间，不是现在；请与当前时间对比，判断话题是否已过时）\n\n"
             f"【老师最近的对话】\n{context}\n\n"
             '严格只输出 JSON：{"state": "suitable"|"stale"|"not_now"}'
         )

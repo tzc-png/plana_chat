@@ -83,6 +83,13 @@ def test_memory() -> None:
     ms.set_stage("u1", "熟悉")
     check("set_stage 生效", ms.get_relationship("u1")["stage"] == "熟悉")
 
+    # add_topic 支持自定义 created_at（静默超时挂起传入事件实际发生时间）
+    ms.add_topic("u1", "user_topic", "中午吃饭（未完成：静默超时，未聊完）",
+                 importance=1, created_at="2026-11-26 12:05:00")
+    open_topics = ms.get_open_topics("u1")
+    check("add_topic 接受自定义 created_at（事件时间）",
+          len(open_topics) == 1 and open_topics[0]["created_at"] == "2026-11-26 12:05:00")
+
 
 def test_relationship() -> None:
     print("== 关系系统 ==")
