@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import signal
 import sys
 from collections import deque
 from datetime import datetime
@@ -499,5 +500,11 @@ async def main() -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     if verbose:
         logging.getLogger("plana_chat").setLevel(logging.DEBUG)
+    # 优雅关闭：收到 SIGTERM（plana off 发的）/SIGINT（Ctrl+C）时记录日志再退出
+    def _shutdown(signum, frame):
+        logger.info("机器人已停止（收到信号 %s）", signum)
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
     bot = TelegramBot(load_config())
     await bot.run()
