@@ -265,6 +265,8 @@ class TelegramBot:
 
         # 阶段0前：静默超时的话题自动结算（用上一轮的时间判断）
         await self.pipeline._maybe_settle_idle_topic(user_id)
+        # 精力回血（须在 store_user 之前，锚点 last_user_time 才是「老师上一条消息」）
+        self.pipeline.recover_energy(user_id)
 
         # 阶段0：老师消息立即落库 + 取消提醒
         self.pipeline.memory.cancel_reminders(user_id)
@@ -407,6 +409,10 @@ class TelegramBot:
             state = "continuing"
         else:
             state = await self.pipeline._topic_decision(user_id, text, display_text)
+
+        # 精力不足：不续接（转 finished，仍会结算 + 清空 current_topic，避免幽灵话题）
+        if state == "continuing" and self.pipeline.energy_too_tired(user_id):
+            state = "finished"
 
         if state == "continuing":
             cur_topic = self.pipeline.memory.get_current_topic(user_id)["topic"]

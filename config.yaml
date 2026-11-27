@@ -75,6 +75,12 @@ behavior:
   self_review: true                # 文本与情感自检开关
   affinity_scale: 1                # 好感度缩放系数（情绪分 × 此系数，负数也乘）
 
+energy:
+  resting: 90              # 精力基线/上限（休息后回到此值）
+  cost: 2                  # 每条 AI 回复消耗的精力
+  recover_per_300s: 2      # 静默每 300 秒恢复的精力
+  proactive_min: 60        # 精力低于此值：不续接、不拾起话题（硬约束）
+
 greeting:
   enabled: true
   times: ["08:00", "11:00", "21:00"]   # 北京时间：早上/中午/晚上

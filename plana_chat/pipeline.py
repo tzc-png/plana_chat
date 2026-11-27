@@ -81,6 +81,15 @@ STAGE_COHABITATION = {
     "恋爱": "恋爱", "结婚": "结婚",
 }
 
+# 精力档位（[下限, 上限)），注入 prompt 的【当前状态】；空文本 = 不注入
+ENERGY_BANDS = [
+    (80, 100, "精力充沛，语气温柔，更愿意主动关心。"),
+    (60, 80, ""),
+    (30, 60, "有点累了，句子会更短、更想早点结束话题，但依然温和。"),
+    (10, 30, "很累了，只回一两句，温和地表示想休息。"),
+    (0, 10, "几乎没有力气了，只回一两句，或轻轻劝老师也早点休息。"),
+]
+
 # 阶段阈值（好感度达到才可进入该阶段；恋爱/结婚为申请阈值）
 STAGE_THRESHOLDS = {"陌生": 0, "熟悉": 10, "喜欢": 30, "恋爱": 60, "结婚": 100}
 
@@ -178,6 +187,9 @@ class PlanaPipeline:
         cohab_instruction = COHABITATION.get(cohab_key, "")
         if cohab_instruction:
             base = base + "\n\n【同住状态】" + cohab_instruction
+        energy_text = self._energy_band_text(user_id)
+        if energy_text:
+            base = base + "\n\n【当前状态】" + energy_text
         if special_hint:
             base = base + "\n\n" + special_hint
         return base
@@ -205,6 +217,38 @@ class PlanaPipeline:
                     f"***一段时间过去了，现在是{self._period(datetime.now().hour)}，"
                     "之前的场景已结束，请根据当前时间重新开始互动。***"
                 )
+        return ""
+
+    # ── 精力（energy）────────────────────────────────────────────────────────
+    def recover_energy(self, user_id: str) -> float:
+        """回血：按「老师最后一次发言」的沉默时长线性恢复，封顶 resting。"""
+        last = self.memory.last_user_time(user_id)
+        if last is None:
+            return self.memory.get_energy(user_id)
+        resting = self.cfg.energy.get("resting", 90)
+        per_300s = self.cfg.energy.get("recover_per_300s", 2)
+        elapsed = (datetime.now() - last).total_seconds()
+        energy = min(resting, self.memory.get_energy(user_id) + elapsed / 300 * per_300s)
+        self.memory.set_energy(user_id, energy)
+        return energy
+
+    def consume_energy(self, user_id: str) -> float:
+        """扣电：每条 AI 回复消耗，下限 0。"""
+        cost = self.cfg.energy.get("cost", 2)
+        energy = max(0.0, self.memory.get_energy(user_id) - cost)
+        self.memory.set_energy(user_id, energy)
+        return energy
+
+    def energy_too_tired(self, user_id: str) -> bool:
+        """精力是否低于主动说话门槛（不续接/不拾起）。"""
+        return self.memory.get_energy(user_id) < self.cfg.energy.get("proactive_min", 60)
+
+    def _energy_band_text(self, user_id: str) -> str:
+        """当前精力档位的注入文案；正常档返回空串（不注入）。"""
+        energy = self.memory.get_energy(user_id)
+        for low, high, text in ENERGY_BANDS:
+            if low <= energy < high:
+                return text
         return ""
 
     # ── 主流程 ──────────────────────────────────────────────────────────────
@@ -928,6 +972,8 @@ class PlanaPipeline:
 
     async def _resume_pending_topic(self, user_id: str) -> str | None:
         """话题 finished 后，按三层优先级拾起挂起话题；拾起后成为 current_topic。"""
+        if self.energy_too_tired(user_id):
+            return None  # 精力不足：不拾起话题
         if not await self._can_chat(user_id):
             return None
         fresh_hours = self.cfg.memory.get("topic_fresh_hours", 1)
@@ -1186,7 +1232,8 @@ class PlanaPipeline:
         return ProcessResult(display_text=display_text, emotion=emotion, voice_wav=voice_wav)
 
     async def store_assistant(self, user_id: str, text: str, emotion: str | None = None) -> None:
-        """把追问等补充回复也存入记忆（带 embedding）。"""
+        """把追问等补充回复也存入记忆（带 embedding）。每存一条即扣一次精力。"""
+        self.consume_energy(user_id)
         emb = await self._embed(text)
         self.memory.add(user_id, "assistant", text, emotion, embedding=emb)
 

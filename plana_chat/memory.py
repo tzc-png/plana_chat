@@ -103,6 +103,13 @@ class MemoryStore:
                 )"""
             )
             conn.execute(
+                """CREATE TABLE IF NOT EXISTS energy_state (
+                    user_id TEXT PRIMARY KEY,
+                    energy REAL NOT NULL DEFAULT 90,
+                    updated_at TEXT NOT NULL
+                )"""
+            )
+            conn.execute(
                 """CREATE TABLE IF NOT EXISTS topics (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id TEXT NOT NULL,
@@ -400,6 +407,24 @@ class MemoryStore:
             "love_date": row["love_date"],
             "marriage_date": row["marriage_date"],
         }
+
+    def get_energy(self, user_id: str) -> float:
+        """精力值（0~resting）；无记录返回默认 90。"""
+        with self._lock, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT energy FROM energy_state WHERE user_id=?", (user_id,)
+            ).fetchone()
+        return float(row["energy"]) if row else 90.0
+
+    def set_energy(self, user_id: str, value: float) -> None:
+        now = datetime.now().strftime(_TIME_FMT)
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                "INSERT INTO energy_state(user_id, energy, updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET energy=excluded.energy, updated_at=excluded.updated_at",
+                (user_id, value, now),
+            )
+            conn.commit()
 
     def update_affinity(self, user_id: str, delta: int) -> int:
         """好感度增减（下限 0，由 SQL MAX 保证），返回最新好感度。"""

@@ -8,6 +8,7 @@
 """
 import sys
 import tempfile
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -138,10 +139,60 @@ def test_relationship() -> None:
     check("结婚锁定不降", cs(None, 0, "结婚") == "结婚")
 
 
+def test_energy() -> None:
+    print("== 精力 ==")
+    tmp = tempfile.mktemp(suffix=".db")
+    ms = MemoryStore(tmp)
+    check("精力默认 90", ms.get_energy("u1") == 90.0)
+
+    cfg = Config({"energy": {"resting": 90, "cost": 2, "recover_per_300s": 2, "proactive_min": 60}})
+    p = object.__new__(PlanaPipeline)
+    p.memory = ms
+    p.cfg = cfg
+
+    ms.set_energy("u1", 90)
+    p.consume_energy("u1")
+    check("扣电 90→88", ms.get_energy("u1") == 88.0)
+    ms.set_energy("u1", 1)
+    p.consume_energy("u1")
+    check("扣电下限 0", ms.get_energy("u1") == 0.0)
+
+    # 回血：无历史 → 不变
+    ms.set_energy("u1", 50)
+    p.recover_energy("u1")
+    check("无历史回血不变", ms.get_energy("u1") == 50.0)
+
+    # 回血：300 秒前有老师消息 → 回约 2 点
+    ms.set_energy("u1", 0)
+    ms.add("u1", "user", "hi",
+           created_at=(datetime.now() - timedelta(seconds=300)).strftime("%Y-%m-%d %H:%M:%S"))
+    p.recover_energy("u1")
+    check("300s 回血约 2 点", 1.5 <= ms.get_energy("u1") <= 3.5)
+
+    # 精力档位
+    ms.set_energy("u1", 90)
+    check("档位 90=充沛", p._energy_band_text("u1").startswith("精力充沛"))
+    ms.set_energy("u1", 70)
+    check("档位 70=正常不注入", p._energy_band_text("u1") == "")
+    ms.set_energy("u1", 45)
+    check("档位 45=偏低", p._energy_band_text("u1").startswith("有点累了"))
+    ms.set_energy("u1", 20)
+    check("档位 20=疲惫", p._energy_band_text("u1").startswith("很累了"))
+    ms.set_energy("u1", 5)
+    check("档位 5=枯竭", p._energy_band_text("u1").startswith("几乎没有力气"))
+
+    # 门槛
+    ms.set_energy("u1", 59)
+    check("59<60 判定疲惫", p.energy_too_tired("u1") is True)
+    ms.set_energy("u1", 60)
+    check("60 不疲惫", p.energy_too_tired("u1") is False)
+
+
 def main() -> None:
     test_postprocess()
     test_memory()
     test_relationship()
+    test_energy()
     print(f"\n结果：{_passed} 通过，{_failed} 失败")
     if _failed:
         sys.exit(1)
