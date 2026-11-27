@@ -162,14 +162,7 @@ def test_energy() -> None:
     p.recover_energy("u1")
     check("无历史回血不变", ms.get_energy("u1") == 50.0)
 
-    # 回血：300 秒前有老师消息 → 回约 2 点
-    ms.set_energy("u1", 0)
-    ms.add("u1", "user", "hi",
-           created_at=(datetime.now() - timedelta(seconds=300)).strftime("%Y-%m-%d %H:%M:%S"))
-    p.recover_energy("u1")
-    check("300s 回血约 2 点", 1.5 <= ms.get_energy("u1") <= 3.5)
-
-    # 精力档位
+    # 精力档位（无历史，回血不生效，读精确值）
     ms.set_energy("u1", 90)
     check("档位 90=充沛", p._energy_band_text("u1").startswith("精力充沛"))
     ms.set_energy("u1", 70)
@@ -181,11 +174,18 @@ def test_energy() -> None:
     ms.set_energy("u1", 5)
     check("档位 5=枯竭", p._energy_band_text("u1").startswith("几乎没有力气"))
 
-    # 门槛
+    # 门槛（无历史，读精确值）
     ms.set_energy("u1", 59)
     check("59<60 判定疲惫", p.energy_too_tired("u1") is True)
     ms.set_energy("u1", 60)
     check("60 不疲惫", p.energy_too_tired("u1") is False)
+
+    # 回血：300 秒前有老师消息 → 回约 2 点（放最后，避免给上面的精确值测试引入历史）
+    ms.set_energy("u1", 0)
+    ms.add("u1", "user", "hi",
+           created_at=(datetime.now() - timedelta(seconds=300)).strftime("%Y-%m-%d %H:%M:%S"))
+    p.recover_energy("u1")
+    check("300s 回血约 2 点", 1.5 <= ms.get_energy("u1") <= 3.5)
 
 
 def test_fact_retirement() -> None:

@@ -116,6 +116,8 @@ _CALLER_LABELS = {
     "greet": "问候",
     "_summarize": "记忆摘要",
     "_extract_facts": "事实抽取",
+    "_tag_fact_keys": "事实键分类",
+    "_merge_fact": "事实合并",
 }
 
 # 关系升级/申请时的「特殊时刻」语气（用于申请命中后重新生成回复）
@@ -236,7 +238,8 @@ class PlanaPipeline:
         return energy
 
     def consume_energy(self, user_id: str) -> float:
-        """扣电：每条 AI 回复消耗，下限 0。"""
+        """扣电：每条 AI 回复消耗，下限 0。先回血再扣（覆盖问候/提醒等无 handle_text 入口的路径）。"""
+        self.recover_energy(user_id)
         cost = self.cfg.energy.get("cost", 2)
         energy = max(0.0, self.memory.get_energy(user_id) - cost)
         self.memory.set_energy(user_id, energy)
@@ -244,10 +247,12 @@ class PlanaPipeline:
 
     def energy_too_tired(self, user_id: str) -> bool:
         """精力是否低于主动说话门槛（不续接/不拾起）。"""
+        self.recover_energy(user_id)
         return self.memory.get_energy(user_id) < self.cfg.energy.get("proactive_min", 60)
 
     def _energy_band_text(self, user_id: str) -> str:
         """当前精力档位的注入文案；正常档返回空串（不注入）。"""
+        self.recover_energy(user_id)
         energy = self.memory.get_energy(user_id)
         for low, high, text in ENERGY_BANDS:
             if low <= energy < high:
