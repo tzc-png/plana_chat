@@ -254,8 +254,12 @@ try:
     m_rest = re.search(r'resting:\s*(\d+)', cfg)
     if m_rest:
         resting = int(m_rest.group(1))
+    max_e = 100
+    m_max = re.search(r'max:\s*(\d+)', cfg)
+    if m_max:
+        max_e = int(m_max.group(1))
     e = energy["energy"] if energy else resting
-    print(f"精力：{round(e)}/{resting}")
+    print(f"精力：{round(e)}/{max_e}")
     if cur and cur["topic"]:
         print(f"当前话题：{disp(cur['topic'])}（类型：{cur['kind']}）")
     else:

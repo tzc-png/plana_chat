@@ -208,7 +208,7 @@ plana help                 # 查看所有指令
 | `telegram` | `token_env` / `proxy` / `allow_user_ids` / `send_retries` | token 环境变量名 / 代理地址 / 用户白名单（空=不限制）/ 发送失败重试次数（默认 3） |
 | `greeting` | `enabled` / `times` / `chat_ids` / `reminder_minutes` / `meal_duration_hours` / `recent_minutes` | 主动问候开关 / 时刻 / 目标用户 / 重新提醒间隔（分钟）/ 吃饭动作持续时间（小时，默认 2，超过则视为已吃完）/ 最近多少分钟内有对话则跳过问候（默认 60） |
 | `behavior` | `mode` / `follow_up` / `settle_delay` / `self_review` / `affinity_scale` | 运行模式 / 话题续接开关 / 发送前等待（秒）/ 文本与情感自检开关 / 好感度缩放系数（默认1） |
-| `energy` | `resting` / `cost` / `recover_per_300s` / `proactive_min` | 精力基线（默认 90）/ 每条 AI 回复消耗（默认 2）/ 静默每 300 秒恢复（默认 2）/ 精力低于此值不续接、不拾起话题（默认 60） |
+| `energy` | `resting` / `max` / `cost` / `recover_per_300s` / `proactive_min` | 精力基线（默认 90）/ 精力上限（默认 100）/ 每条 AI 回复消耗（默认 2）/ 静默每 300 秒恢复（默认 2）/ 精力低于此值不续接、不拾起话题（默认 60） |
 | `emotion` | `enabled` / `image_dir` | 表情图开关（默认关）/ 表情图目录（见下） |
 | `search` | `enabled` | 智能搜索开关（默认关） |
 
