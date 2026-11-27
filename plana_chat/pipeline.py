@@ -479,6 +479,44 @@ class PlanaPipeline:
                     open_items.append({"content": content, "duration": duration, "due_hours": it.get("due_hours")})
         return facts, open_items
 
+    async def _tag_fact_keys(self, facts: list[str]) -> list[dict]:
+        """给抽取到的事实标键（住址/称呼/生日），用于键控退休；只标有把握的。"""
+        if not facts:
+            return []
+        numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(facts, 1))
+        prompt = (
+            "下面是从对话里抽取到的「关于老师的事实」，请给每条判断是否属于「住址/称呼/生日」这三类"
+            "『单一当前值、以后变了要作废旧值』的事实：\n"
+            "- 住址：老师住在哪里（城市/小区/家乡等）\n"
+            "- 称呼：老师怎么称呼普拉娜，或普拉娜怎么称呼老师（昵称、爱称）\n"
+            "- 生日：老师的生日\n\n"
+            "规则（务必遵守）：\n"
+            "- 只有「老师亲口说、且是当前值」才标键；讲过去（以前住…）、还没发生（打算搬…）、"
+            "否定（不住那…）、问句，都不标\n"
+            "- 拿不准就不标，宁可漏标、不可错标\n\n"
+            f"事实列表：\n{numbered}\n\n"
+            '严格只输出 JSON：{"keyed": [{"index": 1, "key": "住址"}]}；没有可标键的则输出 {"keyed": []}'
+        )
+        raw = await self._chat_with_fallback([{"role": "user", "content": prompt}])
+        m = re.search(r"\{.*\}", raw, re.S)
+        if not m:
+            return []
+        try:
+            data = json.loads(m.group(0))
+        except Exception:
+            return []
+        out = []
+        for item in data.get("keyed", []):
+            if not isinstance(item, dict):
+                continue
+            key = item.get("key")
+            idx = item.get("index")
+            i = int(idx) if isinstance(idx, int) or (isinstance(idx, str) and idx.isdigit()) else None
+            if key in ("住址", "称呼", "生日") and i is not None and 1 <= i <= len(facts):
+                out.append({"content": facts[i - 1], "key": key})
+        logger.info("事实键分类：%d 条中 %d 条标键", len(facts), len(out))
+        return out
+
     async def _maybe_consolidate(self, user_id: str) -> None:
         """历史消息超阈值时：总结压缩 + 事实抽取（原文保留，不删除）。"""
         threshold = self.cfg.memory.get("compact_threshold", 20)
@@ -490,7 +528,9 @@ class PlanaPipeline:
             new_summary = await self._summarize(batch, self.memory.get_summary(user_id))
             self.memory.update_summary(user_id, new_summary)
             facts, open_items = await self._extract_facts(batch)
-            self.memory.add_facts(user_id, facts, "fact")
+            keyed = await self._tag_fact_keys(facts)
+            key_map = {k["content"]: k["key"] for k in keyed}
+            self.memory.add_facts(user_id, facts, "fact", key_map=key_map)
             self.memory.add_open_items(user_id, open_items)
             self.memory.update_consolidated_upto(user_id, batch[-1]["id"])
             logger.info(

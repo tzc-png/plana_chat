@@ -188,11 +188,28 @@ def test_energy() -> None:
     check("60 不疲惫", p.energy_too_tired("u1") is False)
 
 
+def test_fact_retirement() -> None:
+    print("== 事实键控退休 ==")
+    tmp = tempfile.mktemp(suffix=".db")
+    ms = MemoryStore(tmp)
+    ms.add_facts("u1", ["老师喜欢喝咖啡"])
+    ms.add_facts("u1", ["老师住在上海"], key_map={"老师住在上海": "住址"})
+    ms.add_facts("u1", ["老师搬到北京了"], key_map={"老师搬到北京了": "住址"})
+    contents = [f["content"] for f in ms.recent_facts("u1", "fact", limit=10)]
+    check("住址旧值被退休", "老师住在上海" not in contents)
+    check("住址新值保留", "老师搬到北京了" in contents)
+    check("无 key 事实不受影响", "老师喜欢喝咖啡" in contents)
+    ms.add_facts("u1", ["老师的生日是 3 月 15 日"], key_map={"老师的生日是 3 月 15 日": "生日"})
+    contents = [f["content"] for f in ms.recent_facts("u1", "fact", limit=10)]
+    check("不同 key 共存", "老师搬到北京了" in contents and "老师的生日是 3 月 15 日" in contents)
+
+
 def main() -> None:
     test_postprocess()
     test_memory()
     test_relationship()
     test_energy()
+    test_fact_retirement()
     print(f"\n结果：{_passed} 通过，{_failed} 失败")
     if _failed:
         sys.exit(1)

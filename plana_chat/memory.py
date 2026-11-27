@@ -137,6 +137,8 @@ class MemoryStore:
             self._ensure_column(conn, "current_topic", "emotions", "TEXT NOT NULL DEFAULT '[]'")
             self._ensure_column(conn, "facts", "duration", "TEXT")
             self._ensure_column(conn, "facts", "due_hours", "REAL")
+            self._ensure_column(conn, "facts", "key", "TEXT")
+            self._ensure_column(conn, "facts", "superseded", "INTEGER DEFAULT 0")
             conn.commit()
 
     # ── 消息 ────────────────────────────────────────────────────────────────
@@ -317,13 +319,24 @@ class MemoryStore:
             conn.commit()
             return cur.rowcount > 0
 
-    def add_facts(self, user_id: str, items: list[str], ftype: str = "fact") -> None:
+    def add_facts(self, user_id: str, items: list[str], ftype: str = "fact",
+                  key_map: dict | None = None) -> None:
+        """存事实；key_map 为 {content: key}，带 key 的事实会作废同 key 的旧条（键控退休）。"""
         now = datetime.now().strftime(_TIME_FMT)
+        km = key_map or {}
         with self._lock, closing(self._connect()) as conn:
             for c in items:
+                key = km.get(c)
+                if key:
+                    # 同 key 旧有效条作废（不删，保留"以前是那样"）
+                    conn.execute(
+                        "UPDATE facts SET superseded=1 "
+                        "WHERE user_id=? AND type='fact' AND key=? AND superseded=0",
+                        (user_id, key),
+                    )
                 conn.execute(
-                    "INSERT INTO facts(user_id, type, content, created_at) VALUES(?,?,?,?)",
-                    (user_id, ftype, c, now),
+                    "INSERT INTO facts(user_id, type, content, key, created_at) VALUES(?,?,?,?,?)",
+                    (user_id, ftype, c, key, now),
                 )
             conn.commit()
 
@@ -353,12 +366,12 @@ class MemoryStore:
         with self._lock, closing(self._connect()) as conn:
             if ftype:
                 rows = conn.execute(
-                    "SELECT content, created_at FROM facts WHERE user_id=? AND type=? ORDER BY id DESC LIMIT ?",
+                    "SELECT content, created_at FROM facts WHERE user_id=? AND type=? AND superseded=0 ORDER BY id DESC LIMIT ?",
                     (user_id, ftype, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT content, created_at FROM facts WHERE user_id=? ORDER BY id DESC LIMIT ?",
+                    "SELECT content, created_at FROM facts WHERE user_id=? AND superseded=0 ORDER BY id DESC LIMIT ?",
                     (user_id, limit),
                 ).fetchall()
         return [{"content": r["content"], "created_at": r["created_at"]} for r in rows]
