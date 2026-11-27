@@ -238,14 +238,28 @@ try:
             "SELECT content FROM topics WHERE user_id=? AND status='open' ORDER BY importance DESC, id DESC LIMIT 5",
             (user_id,),
         ).fetchall()
+        energy = conn.execute("SELECT energy FROM energy_state WHERE user_id=?", (user_id,)).fetchone()
+        cur = conn.execute("SELECT topic, kind FROM current_topic WHERE user_id=?", (user_id,)).fetchone()
     else:
         rel = conn.execute("SELECT affinity, stage FROM relationship ORDER BY user_id LIMIT 1").fetchone()
         topics = conn.execute("SELECT content FROM topics WHERE status='open' ORDER BY importance DESC, id DESC LIMIT 5").fetchall()
+        energy = conn.execute("SELECT energy FROM energy_state ORDER BY user_id LIMIT 1").fetchone()
+        cur = conn.execute("SELECT topic, kind FROM current_topic ORDER BY user_id LIMIT 1").fetchone()
     conn.close()
     if rel:
         print(f"关系：{rel['stage']}（好感度 {rel['affinity']}）")
     else:
         print("关系：陌生（好感度 0）")
+    resting = 90
+    m_rest = re.search(r'resting:\s*(\d+)', cfg)
+    if m_rest:
+        resting = int(m_rest.group(1))
+    e = energy["energy"] if energy else resting
+    print(f"精力：{round(e)}/{resting}")
+    if cur and cur["topic"]:
+        print(f"当前话题：{disp(cur['topic'])}（类型：{cur['kind']}）")
+    else:
+        print("当前话题：（无）")
     if topics:
         print("挂起话题：" + "、".join(disp(t['content']) for t in topics))
     else:
