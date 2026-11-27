@@ -410,11 +410,10 @@ class TelegramBot:
         else:
             state = await self.pipeline._topic_decision(user_id, text, display_text)
 
-        # 精力不足：不续接（转 finished，仍会结算 + 清空 current_topic，避免幽灵话题）
-        if state == "continuing" and self.pipeline.energy_too_tired(user_id):
-            state = "finished"
-
         if state == "continuing":
+            if self.pipeline.energy_too_tired(user_id):
+                # 精力不足：不续接，但话题保持进行中（不结算、不清空，留给老师下一条继续）
+                return
             cur_topic = self.pipeline.memory.get_current_topic(user_id)["topic"]
             cont = await self.pipeline._topic_continuation(user_id, cur_topic or text, text, display_text)
             if cont:
