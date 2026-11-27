@@ -403,16 +403,14 @@ class TelegramBot:
 
     async def _topic_follow_up(self, chat_id: int, user_id: str, text: str, display_text: str) -> None:
         """话题续接：二态判断 finished / continuing，续接或结算+拾起。"""
-        if self.pipeline.memory.has_pending_reminder(user_id):
-            return
         if self.mode == "active":
             state = "continuing"
         else:
             state = await self.pipeline._topic_decision(user_id, text, display_text)
 
         if state == "continuing":
-            if self.pipeline.energy_too_tired(user_id):
-                # 精力不足：不续接，但话题保持进行中（不结算、不清空，留给老师下一条继续）
+            if self.pipeline.should_skip_proactive(user_id):
+                # 低精力/有挂起提醒：不续接，但话题保持进行中（不结算、不清空，留给老师下一条继续）
                 return
             cur_topic = self.pipeline.memory.get_current_topic(user_id)["topic"]
             cont = await self.pipeline._topic_continuation(user_id, cur_topic or text, text, display_text)

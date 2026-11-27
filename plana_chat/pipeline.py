@@ -251,6 +251,10 @@ class PlanaPipeline:
         """精力是否低于主动说话门槛（不续接/不拾起）。"""
         return self.memory.get_energy(user_id) < self.cfg.energy.get("proactive_min", 60)
 
+    def should_skip_proactive(self, user_id: str) -> bool:
+        """是否该跳过「主动说话」（续接/拾起）：低精力，或有挂起提醒。"""
+        return self.energy_too_tired(user_id) or self.memory.has_pending_reminder(user_id)
+
     def _energy_band_text(self, user_id: str) -> str:
         """当前精力档位的注入文案；正常档返回空串（不注入）。"""
         energy = self.memory.get_energy(user_id)
@@ -1058,8 +1062,8 @@ class PlanaPipeline:
 
     async def _resume_pending_topic(self, user_id: str) -> str | None:
         """话题 finished 后，按三层优先级拾起挂起话题；拾起后成为 current_topic。"""
-        if self.energy_too_tired(user_id):
-            return None  # 精力不足：不拾起话题
+        if self.should_skip_proactive(user_id):
+            return None  # 低精力/有挂起提醒：不拾起话题
         if not await self._can_chat(user_id):
             return None
         fresh_hours = self.cfg.memory.get("topic_fresh_hours", 1)
