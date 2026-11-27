@@ -238,8 +238,7 @@ class PlanaPipeline:
         return energy
 
     def consume_energy(self, user_id: str) -> float:
-        """扣电：每条 AI 回复消耗，下限 0。先回血再扣（覆盖问候/提醒等无 handle_text 入口的路径）。"""
-        self.recover_energy(user_id)
+        """扣电：每条 AI 回复消耗，下限 0。回血由各入口（handle_text/greet/reminder）预先完成。"""
         cost = self.cfg.energy.get("cost", 2)
         energy = max(0.0, self.memory.get_energy(user_id) - cost)
         self.memory.set_energy(user_id, energy)
@@ -247,12 +246,10 @@ class PlanaPipeline:
 
     def energy_too_tired(self, user_id: str) -> bool:
         """精力是否低于主动说话门槛（不续接/不拾起）。"""
-        self.recover_energy(user_id)
         return self.memory.get_energy(user_id) < self.cfg.energy.get("proactive_min", 60)
 
     def _energy_band_text(self, user_id: str) -> str:
         """当前精力档位的注入文案；正常档返回空串（不注入）。"""
-        self.recover_energy(user_id)
         energy = self.memory.get_energy(user_id)
         for low, high, text in ENERGY_BANDS:
             if low <= energy < high:
@@ -1222,6 +1219,8 @@ class PlanaPipeline:
         if last_time is not None and (now - last_time).total_seconds() < recent_minutes * 60:
             logger.info("跳过主动问候：最近有进行中对话 user=%s", user_id)
             return None
+        # 问候是主动发消息、无 handle_text 入口，这里补一次精力回血
+        self.recover_energy(user_id)
 
         hour = now.hour
         if 5 <= hour < 11:

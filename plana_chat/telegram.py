@@ -443,7 +443,11 @@ class TelegramBot:
         minutes = self.cfg.greeting.get("reminder_minutes", 20)
         for chat_id in self.cfg.greeting.chat_ids:
             user_id = str(chat_id)
-            for r in self.pipeline.memory.get_due_reminders(user_id, minutes=minutes):
+            due = self.pipeline.memory.get_due_reminders(user_id, minutes=minutes)
+            if due:
+                # 提醒是主动发消息、无 handle_text 入口，先回血一次（避免多次提醒重复回血）
+                self.pipeline.recover_energy(user_id)
+            for r in due:
                 try:
                     text = await self.pipeline._reminder_text(user_id, r["content"])
                     if text:
