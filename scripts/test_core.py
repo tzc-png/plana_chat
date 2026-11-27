@@ -202,6 +202,8 @@ def test_fact_retirement() -> None:
     ms.add_facts("u1", ["老师的生日是 3 月 15 日"], key_map={"老师的生日是 3 月 15 日": "生日"})
     contents = [f["content"] for f in ms.recent_facts("u1", "fact", limit=10)]
     check("不同 key 共存", "老师搬到北京了" in contents and "老师的生日是 3 月 15 日" in contents)
+    check("facts_by_key 返回当前住址", ms.facts_by_key("u1", "住址") == ["老师搬到北京了"])
+    check("facts_by_key 返回当前生日", ms.facts_by_key("u1", "生日") == ["老师的生日是 3 月 15 日"])
 
 
 def main() -> None:

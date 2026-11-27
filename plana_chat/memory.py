@@ -340,6 +340,15 @@ class MemoryStore:
                 )
             conn.commit()
 
+    def facts_by_key(self, user_id: str, key: str) -> list[str]:
+        """返回某 key 当前有效（未退休）的事实内容列表。"""
+        with self._lock, closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT content FROM facts WHERE user_id=? AND type='fact' AND key=? AND superseded=0 ORDER BY id",
+                (user_id, key),
+            ).fetchall()
+        return [r["content"] for r in rows]
+
     def add_open_items(self, user_id: str, items: list[dict]) -> None:
         """存未完成事项，带 duration（short/long/scheduled）与 due_hours。"""
         now = datetime.now().strftime(_TIME_FMT)

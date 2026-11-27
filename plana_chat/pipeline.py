@@ -90,6 +90,9 @@ ENERGY_BANDS = [
     (0, 10, "几乎没有力气了，只回一两句，或轻轻劝老师也早点休息。"),
 ]
 
+# 事实键（单一当前值、变了要作废旧值）；「称呼」拆成双向两个键，避免互相污染
+FACT_KEYS = ("住址", "生日", "老师称呼普拉娜", "普拉娜称呼老师")
+
 # 阶段阈值（好感度达到才可进入该阶段；恋爱/结婚为申请阈值）
 STAGE_THRESHOLDS = {"陌生": 0, "熟悉": 10, "喜欢": 30, "恋爱": 60, "结婚": 100}
 
@@ -480,19 +483,21 @@ class PlanaPipeline:
         return facts, open_items
 
     async def _tag_fact_keys(self, facts: list[str]) -> list[dict]:
-        """给抽取到的事实标键（住址/称呼/生日），用于键控退休；只标有把握的。"""
+        """给抽取到的事实标键（住址/生日/称呼双向），用于键控退休；只标有把握的。"""
         if not facts:
             return []
         numbered = "\n".join(f"{i}. {c}" for i, c in enumerate(facts, 1))
         prompt = (
-            "下面是从对话里抽取到的「关于老师的事实」，请给每条判断是否属于「住址/称呼/生日」这三类"
+            "下面是从对话里抽取到的「关于老师的事实」，请给每条判断是否属于以下四类"
             "『单一当前值、以后变了要作废旧值』的事实：\n"
             "- 住址：老师住在哪里（城市/小区/家乡等）\n"
-            "- 称呼：老师怎么称呼普拉娜，或普拉娜怎么称呼老师（昵称、爱称）\n"
-            "- 生日：老师的生日\n\n"
+            "- 生日：老师的生日\n"
+            "- 老师称呼普拉娜：老师怎么称呼/叫普拉娜（昵称、爱称）\n"
+            "- 普拉娜称呼老师：普拉娜怎么称呼/叫老师\n\n"
             "规则（务必遵守）：\n"
             "- 只有「老师亲口说、且是当前值」才标键；讲过去（以前住…）、还没发生（打算搬…）、"
             "否定（不住那…）、问句，都不标\n"
+            "- 称呼要分方向标；一条事实同时含两个方向时，只标它更侧重的那一个方向\n"
             "- 拿不准就不标，宁可漏标、不可错标\n\n"
             f"事实列表：\n{numbered}\n\n"
             '严格只输出 JSON：{"keyed": [{"index": 1, "key": "住址"}]}；没有可标键的则输出 {"keyed": []}'
@@ -512,10 +517,29 @@ class PlanaPipeline:
             key = item.get("key")
             idx = item.get("index")
             i = int(idx) if isinstance(idx, int) or (isinstance(idx, str) and idx.isdigit()) else None
-            if key in ("住址", "称呼", "生日") and i is not None and 1 <= i <= len(facts):
+            if key in FACT_KEYS and i is not None and 1 <= i <= len(facts):
                 out.append({"content": facts[i - 1], "key": key})
         logger.info("事实键分类：%d 条中 %d 条标键", len(facts), len(out))
         return out
+
+    async def _merge_fact(self, key: str, old_facts: list[str], new_fact: str) -> str:
+        """同 key 冲突时，把旧事实与新事实合并成一条最新、完整、不矛盾的信息。"""
+        prompt = (
+            f"老师之前关于「{key}」的记录（旧的）：\n"
+            + "".join(f"- {o}\n" for o in old_facts)
+            + f"\n老师刚刚说的（新的）：\n- {new_fact}\n\n"
+            + "请把新旧合并成一条「当前信息」（最新、完整、不矛盾）：\n"
+            + "- 以新的为准；旧里有、新没提到、且仍成立的部分要保留\n"
+            + "- 新明确推翻旧的部分 → 用新的\n"
+            + "- 新只是旧的一部分/重复 → 输出完整的旧信息\n"
+            + "- 若同一 key 包含多个维度，都要覆盖\n\n"
+            + "直接输出合并后的这一条信息本身，不要加 - 等符号前缀，不要解释。"
+        )
+        raw = await self._chat_with_fallback([{"role": "user", "content": prompt}])
+        text = raw.strip()
+        # 双保险：剥掉可能带出的列表符号
+        text = re.sub(r"^[-*·•]\s*", "", text).strip()
+        return text or new_fact
 
     async def _maybe_consolidate(self, user_id: str) -> None:
         """历史消息超阈值时：总结压缩 + 事实抽取（原文保留，不删除）。"""
@@ -529,8 +553,25 @@ class PlanaPipeline:
             self.memory.update_summary(user_id, new_summary)
             facts, open_items = await self._extract_facts(batch)
             keyed = await self._tag_fact_keys(facts)
-            key_map = {k["content"]: k["key"] for k in keyed}
-            self.memory.add_facts(user_id, facts, "fact", key_map=key_map)
+            keyed_map = {k["content"]: k["key"] for k in keyed}
+
+            # 冲突合并：同 key 已有旧事实时，先合并成一条再存（避免部分替换丢信息）
+            final_facts = []
+            final_key_map = {}
+            for c in facts:
+                key = keyed_map.get(c)
+                if key is None:
+                    final_facts.append(c)  # 无 key，照常
+                else:
+                    old = self.memory.facts_by_key(user_id, key)
+                    if old:
+                        merged = await self._merge_fact(key, old, c)
+                        final_facts.append(merged)
+                        final_key_map[merged] = key
+                    else:
+                        final_facts.append(c)
+                        final_key_map[c] = key
+            self.memory.add_facts(user_id, final_facts, "fact", key_map=final_key_map)
             self.memory.add_open_items(user_id, open_items)
             self.memory.update_consolidated_upto(user_id, batch[-1]["id"])
             logger.info(
