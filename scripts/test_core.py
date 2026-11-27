@@ -187,6 +187,12 @@ def test_energy() -> None:
     p.recover_energy("u1")
     check("300s 回血约 2 点", 1.5 <= ms.get_energy("u1") <= 3.5)
 
+    # 幂等：紧接着再回血一次，不叠加（锚点已推进到 now）
+    e1 = ms.get_energy("u1")
+    p.recover_energy("u1")
+    e2 = ms.get_energy("u1")
+    check("连续回血不叠加", abs(e2 - e1) < 0.5)
+
 
 def test_fact_retirement() -> None:
     print("== 事实键控退休 ==")

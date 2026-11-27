@@ -226,15 +226,18 @@ class PlanaPipeline:
 
     # ── 精力（energy）────────────────────────────────────────────────────────
     def recover_energy(self, user_id: str) -> float:
-        """回血：按「老师最后一次发言」的沉默时长线性恢复，封顶 resting。"""
+        """回血：按「自上次回血以来的静默时长」线性恢复，封顶 resting；幂等。"""
         last = self.memory.last_user_time(user_id)
         if last is None:
             return self.memory.get_energy(user_id)
         resting = self.cfg.energy.get("resting", 90)
         per_300s = self.cfg.energy.get("recover_per_300s", 2)
-        elapsed = (datetime.now() - last).total_seconds()
+        # 锚点：上次回血时刻；首次回血退回 last_user_time
+        anchor = self.memory.get_recovered_at(user_id) or last
+        elapsed = max(0.0, (datetime.now() - anchor).total_seconds())
         energy = min(resting, self.memory.get_energy(user_id) + elapsed / 300 * per_300s)
         self.memory.set_energy(user_id, energy)
+        self.memory.set_recovered_at(user_id, datetime.now().strftime(_TIME_FMT))
         return energy
 
     def consume_energy(self, user_id: str) -> float:

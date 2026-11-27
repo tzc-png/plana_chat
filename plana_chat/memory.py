@@ -106,7 +106,8 @@ class MemoryStore:
                 """CREATE TABLE IF NOT EXISTS energy_state (
                     user_id TEXT PRIMARY KEY,
                     energy REAL NOT NULL DEFAULT 90,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    recovered_at TEXT
                 )"""
             )
             conn.execute(
@@ -139,6 +140,7 @@ class MemoryStore:
             self._ensure_column(conn, "facts", "due_hours", "REAL")
             self._ensure_column(conn, "facts", "key", "TEXT")
             self._ensure_column(conn, "facts", "superseded", "INTEGER DEFAULT 0")
+            self._ensure_column(conn, "energy_state", "recovered_at", "TEXT")
             conn.commit()
 
     # ── 消息 ────────────────────────────────────────────────────────────────
@@ -445,6 +447,24 @@ class MemoryStore:
                 "INSERT INTO energy_state(user_id, energy, updated_at) VALUES(?,?,?) "
                 "ON CONFLICT(user_id) DO UPDATE SET energy=excluded.energy, updated_at=excluded.updated_at",
                 (user_id, value, now),
+            )
+            conn.commit()
+
+    def get_recovered_at(self, user_id: str) -> datetime | None:
+        """精力回血锚点（上次结算时刻）；无记录返回 None。"""
+        with self._lock, closing(self._connect()) as conn:
+            row = conn.execute(
+                "SELECT recovered_at FROM energy_state WHERE user_id=?", (user_id,)
+            ).fetchone()
+        if row is None or row["recovered_at"] is None:
+            return None
+        return datetime.strptime(row["recovered_at"], _TIME_FMT)
+
+    def set_recovered_at(self, user_id: str, ts: str) -> None:
+        """更新精力回血锚点。"""
+        with self._lock, closing(self._connect()) as conn:
+            conn.execute(
+                "UPDATE energy_state SET recovered_at=? WHERE user_id=?", (ts, user_id)
             )
             conn.commit()
 
